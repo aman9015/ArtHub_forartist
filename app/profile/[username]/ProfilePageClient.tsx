@@ -28,14 +28,26 @@ export default function ProfilePageClient({
 }: Props) {
     const [allArtworks, setAllArtworks] = useState<Artwork[]>(initialArtworks);
     const [activeTab, setActiveTab] = useState<Tab>("posts");
+    const [savedIds, setSavedIds] = useState<number[]>([]);
+    const [likedIds, setLikedIds] = useState<number[]>([]);
 
     useEffect(() => {
-        const saved = localStorage.getItem("arthub_uploads");
+        const savedUploads = localStorage.getItem("arthub_uploads");
+        const uploadedArtworks: Artwork[] = savedUploads
+            ? JSON.parse(savedUploads)
+            : [];
 
-        if (saved) {
-            const uploadedArtworks: Artwork[] = JSON.parse(saved);
-            setAllArtworks([...uploadedArtworks, ...initialArtworks]);
-        }
+        const likedPosts: number[] = JSON.parse(
+            localStorage.getItem("arthub_liked_posts") || "[]"
+        );
+
+        const savedPosts: number[] = JSON.parse(
+            localStorage.getItem("arthub_saved_posts") || "[]"
+        );
+
+        setAllArtworks([...uploadedArtworks, ...initialArtworks]);
+        setLikedIds(likedPosts);
+        setSavedIds(savedPosts);
     }, [initialArtworks]);
 
     const artistWorks = allArtworks.filter(
@@ -44,8 +56,13 @@ export default function ProfilePageClient({
 
     const artistProfile = artistWorks[0];
 
-    const savedArtworks = allArtworks.slice(0, 2);
-    const likedArtworks = allArtworks.slice(1, 3);
+    const savedArtworks = allArtworks.filter((artwork) =>
+        savedIds.includes(artwork.id)
+    );
+
+    const likedArtworks = allArtworks.filter((artwork) =>
+        likedIds.includes(artwork.id)
+    );
 
     let visibleArtworks = artistWorks;
     let emptyMessage = "No posts yet";
@@ -78,12 +95,19 @@ export default function ProfilePageClient({
 
             <div className="mx-auto max-w-6xl px-6 pb-16">
                 <ProfileStats
+                    username={artistProfile.username}
                     artworks={artistWorks.length}
                     saved={savedArtworks.length}
                     liked={likedArtworks.length}
                 />
 
-                <ProfileTabs activeTab={activeTab} onTabChange={setActiveTab} />
+                <ProfileTabs
+                    activeTab={activeTab}
+                    onTabChange={setActiveTab}
+                    postsCount={artistWorks.length}
+                    savedCount={savedArtworks.length}
+                    likedCount={likedArtworks.length}
+                />
 
                 <ProfileGallery
                     artworks={visibleArtworks}

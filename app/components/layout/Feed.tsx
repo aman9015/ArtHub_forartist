@@ -16,9 +16,14 @@ type Artwork = {
 type FeedProps = {
   onUploadClick: () => void;
   artworks: Artwork[];
+  onDeleteArtwork: (id: number) => void;
 };
 
-export default function Feed({ onUploadClick, artworks }: FeedProps) {
+export default function Feed({
+  onUploadClick,
+  artworks,
+  onDeleteArtwork,
+}: FeedProps) {
   const [searchQuery, setSearchQuery] = useState("");
 
   const filteredArtworks = useMemo(() => {
@@ -62,10 +67,12 @@ export default function Feed({ onUploadClick, artworks }: FeedProps) {
         filteredArtworks.map((artwork) => (
           <ArtworkCard
             key={artwork.id}
+            id={artwork.id}
             image={artwork.image}
             title={artwork.title}
             artist={artwork.artist}
             username={artwork.username}
+            onDelete={onDeleteArtwork}
           />
         ))
       ) : (

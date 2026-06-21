@@ -17,28 +17,86 @@ type Artwork = {
     image: string;
 };
 
+type Notification = {
+    id: number;
+    type: "like" | "follow" | "bookmark" | "comment" | "upload" | "delete";
+    user: string;
+    message: string;
+    artwork: string;
+    time: string;
+};
+
+function addNotification(notification: Omit<Notification, "id" | "time">) {
+    const oldNotifications: Notification[] = JSON.parse(
+        localStorage.getItem("arthub_notifications") || "[]"
+    );
+
+    const newNotification: Notification = {
+        id: Date.now(),
+        time: "Just now",
+        ...notification,
+    };
+
+    localStorage.setItem(
+        "arthub_notifications",
+        JSON.stringify([newNotification, ...oldNotifications])
+    );
+}
+
 export default function ExplorePage() {
     const [isUploadOpen, setIsUploadOpen] = useState(false);
-    const [feedArtworks, setFeedArtworks] = useState<Artwork[]>(artworks);
+    const [feedArtworks, setFeedArtworks] = useState<Artwork[]>([]);
 
     useEffect(() => {
-        const saved = localStorage.getItem("arthub_uploads");
+        const savedUploads = localStorage.getItem("arthub_uploads");
+        const uploadedArtworks: Artwork[] = savedUploads
+            ? JSON.parse(savedUploads)
+            : [];
 
-        if (saved) {
-            const uploadedArtworks = JSON.parse(saved);
-            setFeedArtworks([...uploadedArtworks, ...artworks]);
-        }
+        setFeedArtworks([...uploadedArtworks, ...artworks]);
     }, []);
 
     function handleCreateArtwork(newArtwork: Artwork) {
-        const saved = localStorage.getItem("arthub_uploads");
-        const oldUploads = saved ? JSON.parse(saved) : [];
+        const savedUploads = localStorage.getItem("arthub_uploads");
+        const oldUploads: Artwork[] = savedUploads ? JSON.parse(savedUploads) : [];
 
         const updatedUploads = [newArtwork, ...oldUploads];
 
         localStorage.setItem("arthub_uploads", JSON.stringify(updatedUploads));
         setFeedArtworks((prev) => [newArtwork, ...prev]);
+
+        addNotification({
+            type: "upload",
+            user: "You",
+            message: "uploaded a new artwork",
+            artwork: newArtwork.title,
+        });
+
         setIsUploadOpen(false);
+    }
+
+    function handleDeleteArtwork(id: number) {
+        const artworkToDelete = feedArtworks.find((artwork) => artwork.id === id);
+
+        const confirmDelete = confirm("Are you sure you want to delete this artwork?");
+        if (!confirmDelete) return;
+
+        const savedUploads = localStorage.getItem("arthub_uploads");
+        const oldUploads: Artwork[] = savedUploads ? JSON.parse(savedUploads) : [];
+
+        const updatedUploads = oldUploads.filter((artwork) => artwork.id !== id);
+
+        localStorage.setItem("arthub_uploads", JSON.stringify(updatedUploads));
+        setFeedArtworks((prev) => prev.filter((artwork) => artwork.id !== id));
+
+        if (artworkToDelete) {
+            addNotification({
+                type: "delete",
+                user: "You",
+                message: "deleted an artwork",
+                artwork: artworkToDelete.title,
+            });
+        }
     }
 
     return (
@@ -51,6 +109,7 @@ export default function ExplorePage() {
                 <Feed
                     onUploadClick={() => setIsUploadOpen(true)}
                     artworks={feedArtworks}
+                    onDeleteArtwork={handleDeleteArtwork}
                 />
 
                 <div className="hidden lg:block">

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Image from "next/image";
 import {
     X,
@@ -10,9 +10,12 @@ import {
     Bookmark,
     Share2,
     Send,
+    Check,
 } from "lucide-react";
+import { addNotification, getStorage, setStorage } from "@/app/lib/storage";
 
 type ArtworkDetailModalProps = {
+    id: string | number;
     image: string;
     title: string;
     artist: string;
@@ -31,6 +34,7 @@ type Comment = {
 };
 
 export default function ArtworkDetailModal({
+    id,
     image,
     title,
     artist,
@@ -42,19 +46,30 @@ export default function ArtworkDetailModal({
     onClose,
 }: ArtworkDetailModalProps) {
     const [commentText, setCommentText] = useState("");
+    const [shared, setShared] = useState(false);
+    const [comments, setComments] = useState<Comment[]>([]);
 
-    const [comments, setComments] = useState<Comment[]>([
-        {
-            id: 1,
-            name: "Aarav",
-            text: "The lighting in this artwork is amazing.",
-        },
-        {
-            id: 2,
-            name: "Maya",
-            text: "Love the mood and color palette.",
-        },
-    ]);
+    useEffect(() => {
+        const allComments = getStorage<Record<string, Comment[]>>(
+            "arthub_comments",
+            {}
+        );
+
+        const currentPostComments = allComments[String(id)] || [
+            {
+                id: 1,
+                name: "Aarav",
+                text: "The lighting in this artwork is amazing.",
+            },
+            {
+                id: 2,
+                name: "Maya",
+                text: "Love the mood and color palette.",
+            },
+        ];
+
+        setComments(currentPostComments);
+    }, [id]);
 
     function handleAddComment() {
         if (!commentText.trim()) return;
@@ -62,11 +77,57 @@ export default function ArtworkDetailModal({
         const newComment: Comment = {
             id: Date.now(),
             name: "You",
-            text: commentText,
+            text: commentText.trim(),
         };
 
-        setComments([newComment, ...comments]);
+        const updatedComments = [newComment, ...comments];
+        setComments(updatedComments);
+
+        const allComments = getStorage<Record<string, Comment[]>>(
+            "arthub_comments",
+            {}
+        );
+
+        allComments[String(id)] = updatedComments;
+        setStorage("arthub_comments", allComments);
+
+        addNotification({
+            type: "comment",
+            user: "You",
+            message: "commented on",
+            artwork: title,
+        });
+
         setCommentText("");
+    }
+
+    async function handleShare() {
+        const shareUrl = `${window.location.origin}/artwork/${id}`;
+
+        try {
+            if (navigator.share) {
+                await navigator.share({
+                    title,
+                    text: `Check out "${title}" by ${artist} on ArtHub.`,
+                    url: shareUrl,
+                });
+            } else {
+                await navigator.clipboard.writeText(shareUrl);
+            }
+
+            setShared(true);
+
+            setTimeout(() => {
+                setShared(false);
+            }, 1800);
+        } catch {
+            await navigator.clipboard.writeText(shareUrl);
+            setShared(true);
+
+            setTimeout(() => {
+                setShared(false);
+            }, 1800);
+        }
     }
 
     return (
@@ -140,10 +201,11 @@ export default function ArtworkDetailModal({
 
                         <button
                             type="button"
+                            onClick={handleShare}
                             className="mt-4 flex w-full items-center justify-center gap-2 rounded-full border border-zinc-800 py-3 font-semibold hover:bg-zinc-900"
                         >
-                            <Share2 size={18} />
-                            Share Artwork
+                            {shared ? <Check size={18} /> : <Share2 size={18} />}
+                            {shared ? "Shared / Link Copied" : "Share Artwork"}
                         </button>
 
                         <div className="mt-6 border-t border-zinc-800 pt-5">
