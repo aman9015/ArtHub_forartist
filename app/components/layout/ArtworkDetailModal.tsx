@@ -24,8 +24,11 @@ type ArtworkDetailModalProps = {
     liked: boolean;
     likes: number;
     saved: boolean;
+    reposted: boolean;
+    reposts: number;
     onLike: () => void;
     onSave: () => void;
+    onRepost: () => void;
     onCommentsChange: (count: number) => void;
     onClose: () => void;
 };
@@ -96,8 +99,11 @@ export default function ArtworkDetailModal({
     liked,
     likes,
     saved,
+    reposted,
+    reposts,
     onLike,
     onSave,
+    onRepost,
     onCommentsChange,
     onClose,
 }: ArtworkDetailModalProps) {
@@ -333,10 +339,12 @@ export default function ArtworkDetailModal({
 
                         <button
                             type="button"
-                            className="flex flex-col items-center gap-2 rounded-2xl border border-zinc-800 py-4 transition hover:bg-zinc-900"
+                            onClick={onRepost}
+                            className={`flex flex-col items-center gap-2 rounded-2xl border border-zinc-800 py-4 transition hover:bg-zinc-900 hover:text-green-400 ${reposted ? "text-green-400" : ""
+                                }`}
                         >
                             <Repeat2 size={22} />
-                            <span className="text-sm">0</span>
+                            <span className="text-sm">{reposts}</span>
                         </button>
 
                         <button

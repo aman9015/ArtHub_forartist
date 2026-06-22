@@ -14,6 +14,12 @@ import {
 import ArtworkDetailModal from "./layout/ArtworkDetailModal";
 import { createClient } from "@/app/lib/supabase";
 
+type RepostedBy = {
+    name: string;
+    username: string;
+    avatarUrl: string | null;
+};
+
 type ArtworkCardProps = {
     id: string;
     image: string;
@@ -22,6 +28,7 @@ type ArtworkCardProps = {
     username: string;
     ownerId: string;
     avatarUrl: string | null;
+    repostedBy?: RepostedBy;
     onDelete?: (id: string) => void;
 };
 
@@ -33,6 +40,7 @@ export default function ArtworkCard({
     username,
     ownerId,
     avatarUrl,
+    repostedBy,
     onDelete,
 }: ArtworkCardProps) {
     const supabase = useMemo(() => createClient(), []);
@@ -41,12 +49,15 @@ export default function ArtworkCard({
     const [liked, setLiked] = useState(false);
     const [saved, setSaved] = useState(false);
     const [following, setFollowing] = useState(false);
+    const [reposted, setReposted] = useState(false);
 
     const [likes, setLikes] = useState(0);
     const [saves, setSaves] = useState(0);
     const [commentCount, setCommentCount] = useState(0);
+    const [repostCount, setRepostCount] = useState(0);
 
     const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+    const [repostLoading, setRepostLoading] = useState(false);
 
     const isOwner = currentUserId === ownerId;
 
@@ -62,6 +73,7 @@ export default function ArtworkCard({
                 { count: likeCount },
                 { count: saveCount },
                 { count: commentsCount },
+                { count: repostsCount },
             ] = await Promise.all([
                 supabase
                     .from("likes")
@@ -77,38 +89,59 @@ export default function ArtworkCard({
                     .from("comments")
                     .select("*", { count: "exact", head: true })
                     .eq("artwork_id", id),
+
+                supabase
+                    .from("reposts")
+                    .select("*", { count: "exact", head: true })
+                    .eq("artwork_id", id),
             ]);
 
             setLikes(likeCount || 0);
             setSaves(saveCount || 0);
             setCommentCount(commentsCount || 0);
+            setRepostCount(repostsCount || 0);
 
             if (!user) return;
 
-            const { data: existingLike } = await supabase
-                .from("likes")
-                .select("id")
-                .eq("user_id", user.id)
-                .eq("artwork_id", id)
-                .maybeSingle();
+            const [
+                { data: existingLike },
+                { data: existingSave },
+                { data: existingFollow },
+                { data: existingRepost },
+            ] = await Promise.all([
+                supabase
+                    .from("likes")
+                    .select("id")
+                    .eq("user_id", user.id)
+                    .eq("artwork_id", id)
+                    .maybeSingle(),
 
-            const { data: existingSave } = await supabase
-                .from("saves")
-                .select("id")
-                .eq("user_id", user.id)
-                .eq("artwork_id", id)
-                .maybeSingle();
+                supabase
+                    .from("saves")
+                    .select("id")
+                    .eq("user_id", user.id)
+                    .eq("artwork_id", id)
+                    .maybeSingle(),
 
-            const { data: existingFollow } = await supabase
-                .from("follows")
-                .select("id")
-                .eq("follower_id", user.id)
-                .eq("following_id", ownerId)
-                .maybeSingle();
+                supabase
+                    .from("follows")
+                    .select("id")
+                    .eq("follower_id", user.id)
+                    .eq("following_id", ownerId)
+                    .maybeSingle(),
+
+                supabase
+                    .from("reposts")
+                    .select("id")
+                    .eq("user_id", user.id)
+                    .eq("artwork_id", id)
+                    .maybeSingle(),
+            ]);
 
             setLiked(Boolean(existingLike));
             setSaved(Boolean(existingSave));
             setFollowing(Boolean(existingFollow));
+            setReposted(Boolean(existingRepost));
         }
 
         void loadCardState();
@@ -204,6 +237,65 @@ export default function ArtworkCard({
         });
     }
 
+    async function handleRepost() {
+        if (!currentUserId) {
+            alert("Please login first.");
+            return;
+        }
+
+        if (repostLoading) return;
+
+        setRepostLoading(true);
+
+        if (reposted) {
+            const { error } = await supabase
+                .from("reposts")
+                .delete()
+                .eq("user_id", currentUserId)
+                .eq("artwork_id", id);
+
+            setRepostLoading(false);
+
+            if (error) {
+                alert(error.message);
+                return;
+            }
+
+            setReposted(false);
+            setRepostCount((previous) => Math.max(previous - 1, 0));
+
+            window.dispatchEvent(new Event("arthub:repost-changed"));
+            return;
+        }
+
+        const { error } = await supabase.from("reposts").insert({
+            user_id: currentUserId,
+            artwork_id: id,
+        });
+
+        setRepostLoading(false);
+
+        if (error) {
+            alert(error.message);
+            return;
+        }
+
+        setReposted(true);
+        setRepostCount((previous) => previous + 1);
+
+        if (ownerId !== currentUserId) {
+            await createNotification({
+                userId: ownerId,
+                actorId: currentUserId,
+                artworkId: id,
+                type: "repost",
+                message: `reposted your artwork "${title}"`,
+            });
+        }
+
+        window.dispatchEvent(new Event("arthub:repost-changed"));
+    }
+
     async function handleFollow() {
         if (!currentUserId) {
             alert("Please login first.");
@@ -255,122 +347,155 @@ export default function ArtworkCard({
 
     return (
         <>
-            <article className="overflow-hidden rounded-3xl border border-zinc-800 bg-zinc-950">
-                <div className="flex items-center justify-between gap-4 p-5">
-                    <Link
-                        href={`/profile/${username}`}
-                        className="flex items-center gap-3"
-                    >
-                        {avatarUrl ? (
+            <div className="space-y-2">
+                {repostedBy && (
+                    <div className="flex items-center gap-2 px-2 text-sm font-semibold text-zinc-400">
+                        {repostedBy.avatarUrl ? (
                             <img
-                                src={avatarUrl}
-                                alt={artist}
-                                className="h-11 w-11 rounded-full border border-zinc-700 object-cover"
+                                src={repostedBy.avatarUrl}
+                                alt={repostedBy.name}
+                                className="h-6 w-6 rounded-full border border-zinc-700 object-cover"
                             />
                         ) : (
-                            <div className="flex h-11 w-11 items-center justify-center rounded-full bg-zinc-800 font-bold">
-                                {artist.charAt(0)}
+                            <div className="flex h-6 w-6 items-center justify-center rounded-full bg-zinc-800 text-[10px] font-bold text-zinc-200">
+                                {repostedBy.name.charAt(0).toUpperCase()}
                             </div>
                         )}
 
-                        <div>
-                            <h2 className="text-lg font-bold">{artist}</h2>
-                            <p className="text-sm text-zinc-400">@{username}</p>
-                        </div>
-                    </Link>
+                        <Repeat2 size={16} className="text-green-400" />
 
-                    <div className="flex gap-2">
-                        {!isOwner && (
-                            <button
-                                type="button"
-                                onClick={() => void handleFollow()}
-                                className={`rounded-full px-4 py-2 text-sm ${following
-                                        ? "border border-zinc-700 bg-zinc-900 text-white"
-                                        : "border border-zinc-700 hover:bg-zinc-800"
-                                    }`}
-                            >
-                                {following ? "Following" : "Follow"}
-                            </button>
-                        )}
-
-                        {isOwner && (
-                            <button
-                                type="button"
-                                onClick={handleDelete}
-                                className="rounded-full border border-red-900/60 px-3 py-2 text-red-400 hover:bg-red-950"
-                            >
-                                <Trash2 size={17} />
-                            </button>
-                        )}
+                        <span>
+                            {repostedBy.name} reposted
+                            <span className="ml-1 font-normal text-zinc-600">
+                                @{repostedBy.username}
+                            </span>
+                        </span>
                     </div>
-                </div>
+                )}
 
-                <button
-                    type="button"
-                    onClick={() => setIsDetailOpen(true)}
-                    className="relative block h-[420px] w-full overflow-hidden text-left sm:h-[520px]"
-                >
-                    <Image
-                        src={image}
-                        alt={title}
-                        fill
-                        unoptimized
-                        sizes="(max-width: 768px) 100vw, 672px"
-                        className="object-cover"
-                    />
-                </button>
+                <article className="overflow-hidden rounded-3xl border border-zinc-800 bg-zinc-950">
+                    <div className="flex items-center justify-between gap-4 p-5">
+                        <Link
+                            href={`/profile/${username}`}
+                            className="flex items-center gap-3"
+                        >
+                            {avatarUrl ? (
+                                <img
+                                    src={avatarUrl}
+                                    alt={artist}
+                                    className="h-11 w-11 rounded-full border border-zinc-700 object-cover"
+                                />
+                            ) : (
+                                <div className="flex h-11 w-11 items-center justify-center rounded-full bg-zinc-800 font-bold">
+                                    {artist.charAt(0)}
+                                </div>
+                            )}
 
-                <div className="p-5">
+                            <div>
+                                <h2 className="text-lg font-bold">{artist}</h2>
+                                <p className="text-sm text-zinc-400">@{username}</p>
+                            </div>
+                        </Link>
+
+                        <div className="flex gap-2">
+                            {!isOwner && (
+                                <button
+                                    type="button"
+                                    onClick={() => void handleFollow()}
+                                    className={`rounded-full px-4 py-2 text-sm ${following
+                                            ? "border border-zinc-700 bg-zinc-900 text-white"
+                                            : "border border-zinc-700 hover:bg-zinc-800"
+                                        }`}
+                                >
+                                    {following ? "Following" : "Follow"}
+                                </button>
+                            )}
+
+                            {isOwner && (
+                                <button
+                                    type="button"
+                                    onClick={handleDelete}
+                                    className="rounded-full border border-red-900/60 px-3 py-2 text-red-400 hover:bg-red-950"
+                                >
+                                    <Trash2 size={17} />
+                                </button>
+                            )}
+                        </div>
+                    </div>
+
                     <button
                         type="button"
                         onClick={() => setIsDetailOpen(true)}
-                        className="text-left"
+                        className="relative block h-[420px] w-full overflow-hidden text-left sm:h-[520px]"
                     >
-                        <h2 className="text-2xl font-bold hover:underline">{title}</h2>
+                        <Image
+                            src={image}
+                            alt={title}
+                            fill
+                            unoptimized
+                            sizes="(max-width: 768px) 100vw, 672px"
+                            className="object-cover"
+                        />
                     </button>
 
-                    <div className="mt-5 flex items-center justify-between">
-                        <div className="flex gap-5 text-zinc-200">
-                            <button
-                                type="button"
-                                onClick={() => void handleLike()}
-                                className={`flex items-center gap-2 hover:text-red-400 ${liked ? "text-red-400" : ""
-                                    }`}
-                            >
-                                <Heart size={21} fill={liked ? "currentColor" : "none"} />
-                                <span>{likes}</span>
-                            </button>
-
-                            <button
-                                type="button"
-                                onClick={() => setIsDetailOpen(true)}
-                                className="flex items-center gap-2 hover:text-blue-400"
-                            >
-                                <MessageCircle size={21} />
-                                <span>{commentCount}</span>
-                            </button>
-
-                            <button
-                                type="button"
-                                className="flex items-center gap-2 hover:text-green-400"
-                            >
-                                <Repeat2 size={21} />
-                                <span>0</span>
-                            </button>
-                        </div>
-
+                    <div className="p-5">
                         <button
                             type="button"
-                            onClick={() => void handleSave()}
-                            className={`flex items-center gap-1 hover:text-yellow-400 ${saved ? "text-yellow-400" : ""
-                                }`}
+                            onClick={() => setIsDetailOpen(true)}
+                            className="text-left"
                         >
-                            <Bookmark size={21} fill={saved ? "currentColor" : "none"} />
-                            {saves > 0 && <span className="text-sm">{saves}</span>}
+                            <h2 className="text-2xl font-bold hover:underline">{title}</h2>
                         </button>
+
+                        <div className="mt-5 flex items-center justify-between">
+                            <div className="flex gap-5 text-zinc-200">
+                                <button
+                                    type="button"
+                                    onClick={() => void handleLike()}
+                                    className={`flex items-center gap-2 hover:text-red-400 ${liked ? "text-red-400" : ""
+                                        }`}
+                                >
+                                    <Heart size={21} fill={liked ? "currentColor" : "none"} />
+                                    <span>{likes}</span>
+                                </button>
+
+                                <button
+                                    type="button"
+                                    onClick={() => setIsDetailOpen(true)}
+                                    className="flex items-center gap-2 hover:text-blue-400"
+                                >
+                                    <MessageCircle size={21} />
+                                    <span>{commentCount}</span>
+                                </button>
+
+                                <button
+                                    type="button"
+                                    onClick={() => void handleRepost()}
+                                    disabled={repostLoading}
+                                    className={`flex items-center gap-2 transition hover:text-green-400 disabled:opacity-50 ${reposted ? "text-green-400" : ""
+                                        }`}
+                                >
+                                    <Repeat2 size={21} />
+                                    <span>{repostCount}</span>
+                                </button>
+                            </div>
+
+                            <button
+                                type="button"
+                                onClick={() => void handleSave()}
+                                className={`flex items-center gap-1 hover:text-yellow-400 ${saved ? "text-yellow-400" : ""
+                                    }`}
+                            >
+                                <Bookmark
+                                    size={21}
+                                    fill={saved ? "currentColor" : "none"}
+                                />
+                                {saves > 0 && <span className="text-sm">{saves}</span>}
+                            </button>
+                        </div>
                     </div>
-                </div>
-            </article>
+                </article>
+            </div>
 
             {isDetailOpen && (
                 <ArtworkDetailModal
@@ -381,8 +506,11 @@ export default function ArtworkCard({
                     liked={liked}
                     likes={likes}
                     saved={saved}
+                    reposted={reposted}
+                    reposts={repostCount}
                     onLike={handleLike}
                     onSave={handleSave}
+                    onRepost={handleRepost}
                     onCommentsChange={setCommentCount}
                     onClose={() => setIsDetailOpen(false)}
                 />

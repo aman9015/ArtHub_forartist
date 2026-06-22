@@ -4,7 +4,7 @@ type CreateNotificationParams = {
     userId: string;
     actorId: string;
     artworkId?: string | null;
-    type: "like" | "comment" | "save" | "follow";
+    type: "comment" | "like" | "follow" | "save" | "repost";
     message: string;
 };
 

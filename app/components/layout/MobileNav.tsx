@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { usePathname } from "next/navigation";
 import {
   BarChart3,
@@ -18,10 +18,17 @@ import { createClient } from "@/app/lib/supabase";
 
 type MobileNavProps = {
   onUploadClick: () => void;
+  hasNewFeed?: boolean;
+  onExploreClick?: () => void;
 };
 
-export default function MobileNav({ onUploadClick }: MobileNavProps) {
+export default function MobileNav({
+  onUploadClick,
+  hasNewFeed = false,
+  onExploreClick,
+}: MobileNavProps) {
   const pathname = usePathname();
+  const supabase = useMemo(() => createClient(), []);
 
   const [isMoreOpen, setIsMoreOpen] = useState(false);
   const [profileUrl, setProfileUrl] = useState("/create-profile");
@@ -32,8 +39,6 @@ export default function MobileNav({ onUploadClick }: MobileNavProps) {
 
   useEffect(() => {
     async function loadMobileNavData() {
-      const supabase = createClient();
-
       const {
         data: { user },
       } = await supabase.auth.getUser();
@@ -83,15 +88,13 @@ export default function MobileNav({ onUploadClick }: MobileNavProps) {
     }
 
     void loadMobileNavData();
-  }, []);
+  }, [supabase]);
 
   useEffect(() => {
     setIsMoreOpen(false);
   }, [pathname]);
 
   async function handleLogout() {
-    const supabase = createClient();
-
     const { error } = await supabase.auth.signOut();
 
     if (error) {
@@ -183,9 +186,20 @@ export default function MobileNav({ onUploadClick }: MobileNavProps) {
         <Link
           href="/explore"
           aria-label="Explore"
+          onClick={(event) => {
+            if (!onExploreClick) return;
+
+            event.preventDefault();
+            onExploreClick();
+          }}
           className={itemClass(exploreActive)}
         >
           <Compass size={20} />
+
+          {hasNewFeed && (
+            <span className="absolute right-1 top-0.5 h-2.5 w-2.5 rounded-full bg-red-500 ring-2 ring-zinc-950" />
+          )}
+
           <span>Explore</span>
         </Link>
 

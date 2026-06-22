@@ -1,13 +1,20 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import Feed from "@/app/components/layout/Feed";
 import Trending from "@/app/components/layout/Trending";
 import { createClient } from "@/app/lib/supabase";
 import { addNotification } from "@/app/lib/storage";
 
-type Artwork = {
+type RepostedBy = {
+  name: string;
+  username: string;
+  avatarUrl: string | null;
+};
+
+type FeedArtwork = {
+  feedId: string;
   id: string;
   title: string;
   artist: string;
@@ -16,6 +23,8 @@ type Artwork = {
   image: string;
   ownerId: string;
   avatarUrl: string | null;
+  activityAt: string;
+  repostedBy?: RepostedBy;
 };
 
 type DbArtwork = {
@@ -24,6 +33,14 @@ type DbArtwork = {
   title: string;
   description: string | null;
   image_url: string;
+  created_at: string;
+};
+
+type DbRepost = {
+  id: string;
+  user_id: string;
+  artwork_id: string;
+  created_at: string;
 };
 
 type Profile = {
@@ -34,69 +51,156 @@ type Profile = {
   avatar_url: string | null;
 };
 
-export default function ExplorePage() {
-  const supabase = createClient();
+type LoadArtworksOptions = {
+  scrollToTop?: boolean;
+};
 
-  const [feedArtworks, setFeedArtworks] = useState<Artwork[]>([]);
+export default function ExplorePage() {
+  const supabase = useMemo(() => createClient(), []);
+
+  const [feedArtworks, setFeedArtworks] = useState<FeedArtwork[]>([]);
   const [loading, setLoading] = useState(true);
 
-  async function loadArtworks() {
-    setLoading(true);
+  const loadArtworks = useCallback(
+    async ({ scrollToTop = false }: LoadArtworksOptions = {}) => {
+      setLoading(true);
 
-    const { data: artworksData, error: artworksError } = await supabase
-      .from("artworks")
-      .select("id, user_id, title, description, image_url")
-      .order("created_at", { ascending: false });
+      const [
+        { data: artworksData, error: artworksError },
+        { data: profilesData, error: profilesError },
+        { data: repostsData, error: repostsError },
+      ] = await Promise.all([
+        supabase
+          .from("artworks")
+          .select("id, user_id, title, description, image_url, created_at")
+          .order("created_at", { ascending: false }),
 
-    const { data: profilesData, error: profilesError } = await supabase
-      .from("profiles")
-      .select("id, name, username, about, avatar_url");
+        supabase
+          .from("profiles")
+          .select("id, name, username, about, avatar_url"),
 
-    if (artworksError || profilesError) {
-      alert(artworksError?.message || profilesError?.message);
+        supabase
+          .from("reposts")
+          .select("id, user_id, artwork_id, created_at")
+          .order("created_at", { ascending: false }),
+      ]);
+
+      if (artworksError || profilesError || repostsError) {
+        alert(
+          artworksError?.message ||
+            profilesError?.message ||
+            repostsError?.message
+        );
+
+        setLoading(false);
+        return;
+      }
+
+      const artworks = (artworksData || []) as DbArtwork[];
+      const profiles = (profilesData || []) as Profile[];
+      const reposts = (repostsData || []) as DbRepost[];
+
+      const profileById = new Map(
+        profiles.map((profile) => [profile.id, profile])
+      );
+
+      const artworkById = new Map(
+        artworks.map((artwork) => [artwork.id, artwork])
+      );
+
+      function createFeedArtwork(
+        artwork: DbArtwork,
+        feedId: string,
+        activityAt: string,
+        repostedBy?: RepostedBy
+      ): FeedArtwork {
+        const artistProfile = profileById.get(artwork.user_id);
+
+        return {
+          feedId,
+          id: artwork.id,
+          title: artwork.title,
+          artist: artistProfile?.name || "Unknown Artist",
+          username: artistProfile?.username || "unknown",
+          bio: artwork.description || artistProfile?.about || "",
+          image: artwork.image_url,
+          ownerId: artwork.user_id,
+          avatarUrl: artistProfile?.avatar_url || null,
+          activityAt,
+          repostedBy,
+        };
+      }
+
+      const originalArtworkItems = artworks.map((artwork) =>
+        createFeedArtwork(
+          artwork,
+          `artwork-${artwork.id}`,
+          artwork.created_at
+        )
+      );
+
+      const repostedArtworkItems = reposts.flatMap((repost) => {
+        const originalArtwork = artworkById.get(repost.artwork_id);
+
+        if (!originalArtwork) return [];
+
+        const reposterProfile = profileById.get(repost.user_id);
+
+        return [
+          createFeedArtwork(
+            originalArtwork,
+            `repost-${repost.id}`,
+            repost.created_at,
+            {
+              name: reposterProfile?.name || "Unknown User",
+              username: reposterProfile?.username || "unknown",
+              avatarUrl: reposterProfile?.avatar_url || null,
+            }
+          ),
+        ];
+      });
+
+      const combinedFeed = [...originalArtworkItems, ...repostedArtworkItems];
+
+      combinedFeed.sort(
+        (first, second) =>
+          new Date(second.activityAt).getTime() -
+          new Date(first.activityAt).getTime()
+      );
+
+      setFeedArtworks(combinedFeed);
       setLoading(false);
-      return;
-    }
 
-    const profiles = (profilesData || []) as Profile[];
+      window.dispatchEvent(new Event("arthub:feed-refreshed"));
 
-    const formattedArtworks: Artwork[] = (
-      (artworksData || []) as DbArtwork[]
-    ).map((artwork) => {
-      const profile = profiles.find((item) => item.id === artwork.user_id);
-
-      return {
-        id: artwork.id,
-        title: artwork.title,
-        artist: profile?.name || "Unknown Artist",
-        username: profile?.username || "unknown",
-        bio: artwork.description || profile?.about || "",
-        image: artwork.image_url,
-        ownerId: artwork.user_id,
-        avatarUrl: profile?.avatar_url || null,
-      };
-    });
-
-    setFeedArtworks(formattedArtworks);
-    setLoading(false);
-  }
+      if (scrollToTop) {
+        window.requestAnimationFrame(() => {
+          window.scrollTo({
+            top: 0,
+            behavior: "smooth",
+          });
+        });
+      }
+    },
+    [supabase]
+  );
 
   useEffect(() => {
     void loadArtworks();
 
-    function refreshFeedAfterUpload() {
-      void loadArtworks();
+    function handleManualFeedRefresh() {
+      void loadArtworks({ scrollToTop: true });
     }
 
-    window.addEventListener("arthub:artwork-created", refreshFeedAfterUpload);
+    window.addEventListener("arthub:refresh-feed", handleManualFeedRefresh);
 
     return () => {
       window.removeEventListener(
-        "arthub:artwork-created",
-        refreshFeedAfterUpload
+        "arthub:refresh-feed",
+        handleManualFeedRefresh
       );
     };
-  }, []);
+  }, [loadArtworks]);
 
   function openGlobalUpload() {
     window.dispatchEvent(new Event("arthub:open-upload"));
@@ -129,7 +233,7 @@ export default function ExplorePage() {
       });
     }
 
-    await loadArtworks();
+    await loadArtworks({ scrollToTop: true });
   }
 
   return (

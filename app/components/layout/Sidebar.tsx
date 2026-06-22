@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   BarChart3,
   Bell,
@@ -16,10 +16,16 @@ import { createClient } from "@/app/lib/supabase";
 
 type SidebarProps = {
   onUploadClick: () => void;
+  hasNewFeed?: boolean;
+  onExploreClick?: () => void;
 };
 
-export default function Sidebar({ onUploadClick }: SidebarProps) {
-  const supabase = createClient();
+export default function Sidebar({
+  onUploadClick,
+  hasNewFeed = false,
+  onExploreClick,
+}: SidebarProps) {
+  const supabase = useMemo(() => createClient(), []);
 
   const [profileUrl, setProfileUrl] = useState("/create-profile");
   const [initial, setInitial] = useState("A");
@@ -78,7 +84,7 @@ export default function Sidebar({ onUploadClick }: SidebarProps) {
       setUnreadMessageCount(unreadMessages || 0);
     }
 
-    loadSidebarData();
+    void loadSidebarData();
   }, [supabase]);
 
   return (
@@ -106,9 +112,19 @@ export default function Sidebar({ onUploadClick }: SidebarProps) {
             href="/explore"
             title="Explore"
             aria-label="Explore"
-            className="flex h-12 w-12 items-center justify-center rounded-2xl bg-zinc-800 text-white transition hover:bg-zinc-700"
+            onClick={(event) => {
+              if (!onExploreClick) return;
+
+              event.preventDefault();
+              onExploreClick();
+            }}
+            className="relative flex h-12 w-12 items-center justify-center rounded-2xl bg-zinc-800 text-white transition hover:bg-zinc-700"
           >
             <Compass size={22} />
+
+            {hasNewFeed && (
+              <span className="absolute right-1 top-1 h-2.5 w-2.5 rounded-full bg-red-500 ring-2 ring-zinc-950" />
+            )}
           </Link>
 
           <Link

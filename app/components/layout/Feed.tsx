@@ -4,7 +4,14 @@ import { useMemo, useState } from "react";
 import ArtworkCard from "@/app/components/ArtworkCard";
 import Topbar from "./Topbar";
 
+type RepostedBy = {
+  name: string;
+  username: string;
+  avatarUrl: string | null;
+};
+
 type Artwork = {
+  feedId: string;
   id: string;
   title: string;
   artist: string;
@@ -13,6 +20,7 @@ type Artwork = {
   image: string;
   ownerId: string;
   avatarUrl: string | null;
+  repostedBy?: RepostedBy;
 };
 
 type FeedProps = {
@@ -38,7 +46,9 @@ export default function Feed({
         artwork.title.toLowerCase().includes(query) ||
         artwork.artist.toLowerCase().includes(query) ||
         artwork.username.toLowerCase().includes(query) ||
-        artwork.bio.toLowerCase().includes(query)
+        artwork.bio.toLowerCase().includes(query) ||
+        artwork.repostedBy?.name.toLowerCase().includes(query) ||
+        artwork.repostedBy?.username.toLowerCase().includes(query)
       );
     });
   }, [searchQuery, artworks]);
@@ -68,7 +78,7 @@ export default function Feed({
       {filteredArtworks.length > 0 ? (
         filteredArtworks.map((artwork) => (
           <ArtworkCard
-            key={artwork.id}
+            key={artwork.feedId}
             id={artwork.id}
             image={artwork.image}
             title={artwork.title}
@@ -76,6 +86,7 @@ export default function Feed({
             username={artwork.username}
             ownerId={artwork.ownerId}
             avatarUrl={artwork.avatarUrl}
+            repostedBy={artwork.repostedBy}
             onDelete={onDeleteArtwork}
           />
         ))
