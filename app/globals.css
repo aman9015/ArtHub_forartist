@@ -33,12 +33,98 @@ body {
   position: absolute;
   width: 700px;
   height: 700px;
-  background: radial-gradient(
-    circle,
-    rgba(165, 85, 247, 0.35),
-    transparent 70%
-  );
+  background: radial-gradient(circle,
+      rgba(165, 85, 247, 0.35),
+      transparent 70%);
   filter: blur(120px);
   z-index: 0;
   pointer-events: none;
+}
+
+/* Shared signed-in app layout */
+
+.arthub-app-root {
+  min-height: 100vh;
+  background: #000;
+  color: #fff;
+}
+
+.arthub-app-shell {
+  width: 100%;
+  max-width: 80rem;
+  min-height: 100vh;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1.5rem;
+  padding: 1.5rem 1rem 7rem;
+}
+
+.arthub-app-sidebar {
+  display: none;
+  min-width: 0;
+}
+
+.arthub-app-content {
+  min-width: 0;
+}
+
+.arthub-mobile-navigation {
+  display: block;
+}
+
+.arthub-explore-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1.5rem;
+  min-width: 0;
+}
+
+.arthub-explore-feed {
+  min-width: 0;
+}
+
+.arthub-explore-trending {
+  display: none;
+  min-width: 0;
+}
+
+@media (min-width: 900px) {
+  .arthub-app-shell {
+    grid-template-columns: 220px minmax(0, 1fr);
+    padding: 1.5rem;
+  }
+
+  .arthub-app-sidebar {
+    display: block;
+  }
+
+  .arthub-mobile-navigation {
+    display: none;
+  }
+}
+
+@media (min-width: 1180px) {
+  .arthub-explore-layout {
+    grid-template-columns: minmax(0, 1fr) 300px;
+  }
+
+  .arthub-explore-trending {
+    display: block;
+  }
+}
+
+/* Sidebar can scroll, but its scrollbar stays hidden */
+.sidebar-scroll {
+  overflow-y: auto;
+  overflow-x: hidden;
+
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.sidebar-scroll::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
 }

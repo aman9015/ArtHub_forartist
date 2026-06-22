@@ -82,7 +82,7 @@ export default function Sidebar({ onUploadClick }: SidebarProps) {
   }, [supabase]);
 
   return (
-    <aside className="sticky top-4 h-[calc(100vh-2rem)] overflow-y-auto pr-1">
+    <aside className="sidebar-scroll sticky top-4 h-[calc(100vh-2rem)] pr-1">
       <div className="flex min-h-full flex-col items-center gap-5">
         <Link
           href={profileUrl}
