@@ -1,7 +1,7 @@
 import Image from "next/image";
 
 type Artwork = {
-    id: number;
+    id: string;
     title: string;
     image: string;
 };
@@ -11,12 +11,17 @@ type Props = {
     emptyMessage: string;
 };
 
-export default function profileGallery({ artworks, emptyMessage }: Props) {
+export default function ProfileGallery({
+    artworks,
+    emptyMessage,
+}: Props) {
     if (artworks.length === 0) {
         return (
             <div className="mt-10 rounded-3xl border border-zinc-800 bg-zinc-950 p-12 text-center">
                 <h2 className="text-xl font-bold">{emptyMessage}</h2>
-                <p className="mt-2 text-zinc-500">Your artworks will appear here.</p>
+                <p className="mt-2 text-zinc-500">
+                    Your artworks will appear here.
+                </p>
             </div>
         );
     }
@@ -33,6 +38,7 @@ export default function profileGallery({ artworks, emptyMessage }: Props) {
                             src={artwork.image}
                             alt={artwork.title}
                             fill
+                            unoptimized
                             sizes="(max-width:768px) 100vw, 33vw"
                             className="object-cover"
                         />

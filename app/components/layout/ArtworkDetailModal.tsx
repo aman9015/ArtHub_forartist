@@ -12,7 +12,8 @@ import {
     Send,
     Check,
 } from "lucide-react";
-import { addNotification, getStorage, setStorage } from "@/app/lib/storage";
+import { addNotification } from "@/app/lib/storage";
+import { createClient } from "@/app/lib/supabase";
 
 type ArtworkDetailModalProps = {
     id: string | number;
@@ -29,8 +30,23 @@ type ArtworkDetailModalProps = {
 
 type Comment = {
     id: number;
+    user_id: string;
+    content: string;
+    created_at: string;
+    authorName: string;
+};
+
+type DbComment = {
+    id: number;
+    user_id: string;
+    content: string;
+    created_at: string;
+};
+
+type Profile = {
+    id: string;
     name: string;
-    text: string;
+    username: string;
 };
 
 export default function ArtworkDetailModal({
@@ -45,51 +61,85 @@ export default function ArtworkDetailModal({
     onSave,
     onClose,
 }: ArtworkDetailModalProps) {
+    const supabase = createClient();
+
     const [commentText, setCommentText] = useState("");
     const [shared, setShared] = useState(false);
     const [comments, setComments] = useState<Comment[]>([]);
+    const [commentLoading, setCommentLoading] = useState(false);
+
+    async function loadComments() {
+        const { data: commentsData, error: commentsError } = await supabase
+            .from("comments")
+            .select("id, user_id, content, created_at")
+            .eq("artwork_id", String(id))
+            .order("created_at", { ascending: false });
+
+        if (commentsError) {
+            console.log(commentsError.message);
+            return;
+        }
+
+        const { data: profilesData } = await supabase
+            .from("profiles")
+            .select("id, name, username");
+
+        const profiles = (profilesData || []) as Profile[];
+
+        const formattedComments: Comment[] = ((commentsData || []) as DbComment[]).map(
+            (comment) => {
+                const profile = profiles.find((p) => p.id === comment.user_id);
+
+                return {
+                    id: comment.id,
+                    user_id: comment.user_id,
+                    content: comment.content,
+                    created_at: comment.created_at,
+                    authorName: profile?.name || "Unknown User",
+                };
+            }
+        );
+
+        setComments(formattedComments);
+    }
 
     useEffect(() => {
-        const allComments = getStorage<Record<string, Comment[]>>(
-            "arthub_comments",
-            {}
-        );
+        loadComments();
 
-        const currentPostComments = allComments[String(id)] || [
-            {
-                id: 1,
-                name: "Aarav",
-                text: "The lighting in this artwork is amazing.",
-            },
-            {
-                id: 2,
-                name: "Maya",
-                text: "Love the mood and color palette.",
-            },
-        ];
+        document.body.style.overflow = "hidden";
 
-        setComments(currentPostComments);
+        return () => {
+            document.body.style.overflow = "";
+        };
     }, [id]);
 
-    function handleAddComment() {
+    async function handleAddComment() {
         if (!commentText.trim()) return;
 
-        const newComment: Comment = {
-            id: Date.now(),
-            name: "You",
-            text: commentText.trim(),
-        };
+        setCommentLoading(true);
 
-        const updatedComments = [newComment, ...comments];
-        setComments(updatedComments);
+        const {
+            data: { user },
+        } = await supabase.auth.getUser();
 
-        const allComments = getStorage<Record<string, Comment[]>>(
-            "arthub_comments",
-            {}
-        );
+        if (!user) {
+            setCommentLoading(false);
+            alert("Please login first.");
+            return;
+        }
 
-        allComments[String(id)] = updatedComments;
-        setStorage("arthub_comments", allComments);
+        const { error } = await supabase.from("comments").insert({
+            user_id: user.id,
+            artwork_id: String(id),
+            content: commentText.trim(),
+        });
+
+        setCommentLoading(false);
+
+        if (error) {
+            alert(error.message);
+            return;
+        }
 
         addNotification({
             type: "comment",
@@ -99,6 +149,7 @@ export default function ArtworkDetailModal({
         });
 
         setCommentText("");
+        await loadComments();
     }
 
     async function handleShare() {
@@ -116,23 +167,21 @@ export default function ArtworkDetailModal({
             }
 
             setShared(true);
-
-            setTimeout(() => {
-                setShared(false);
-            }, 1800);
+            setTimeout(() => setShared(false), 1800);
         } catch {
             await navigator.clipboard.writeText(shareUrl);
             setShared(true);
-
-            setTimeout(() => {
-                setShared(false);
-            }, 1800);
+            setTimeout(() => setShared(false), 1800);
         }
     }
 
     return (
-        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/75 px-4 backdrop-blur-md">
-            <section className="relative grid max-h-[90vh] w-full max-w-5xl overflow-hidden rounded-[2rem] border border-zinc-800 bg-zinc-950 shadow-2xl lg:grid-cols-[1.2fr_0.8fr]">
+        <div
+            className="fixed inset-0 z-[120] flex items-center justify-center overflow-hidden bg-black/75 px-4 backdrop-blur-md"
+            onWheel={(e) => e.stopPropagation()}
+            onTouchMove={(e) => e.stopPropagation()}
+        >
+            <section className="relative grid h-[90vh] w-full max-w-5xl overflow-hidden rounded-[2rem] border border-zinc-800 bg-zinc-950 shadow-2xl lg:grid-cols-[1.2fr_0.8fr]">
                 <button
                     type="button"
                     onClick={onClose}
@@ -141,17 +190,29 @@ export default function ArtworkDetailModal({
                     <X size={24} />
                 </button>
 
-                <div className="relative min-h-[360px] bg-zinc-900 lg:min-h-[650px]">
+                <div className="relative hidden bg-zinc-900 lg:block">
                     <Image
                         src={image}
                         alt={title}
                         fill
-                        sizes="(max-width: 1024px) 100vw, 60vw"
+                        unoptimized
+                        sizes="60vw"
                         className="object-cover"
                     />
                 </div>
 
-                <div className="flex max-h-[90vh] flex-col overflow-hidden p-6">
+                <div className="relative min-h-[280px] bg-zinc-900 lg:hidden">
+                    <Image
+                        src={image}
+                        alt={title}
+                        fill
+                        unoptimized
+                        sizes="100vw"
+                        className="object-cover"
+                    />
+                </div>
+
+                <div className="flex h-full min-h-0 flex-col overflow-hidden p-6">
                     <div className="shrink-0">
                         <h1 className="text-3xl font-bold">{title}</h1>
                         <p className="mt-2 text-zinc-400">by {artist}</p>
@@ -185,7 +246,7 @@ export default function ArtworkDetailModal({
                                 className="flex flex-col items-center gap-2 rounded-2xl border border-zinc-800 py-4 hover:bg-zinc-900"
                             >
                                 <Repeat2 size={22} />
-                                <span className="text-sm">412</span>
+                                <span className="text-sm">0</span>
                             </button>
 
                             <button
@@ -226,7 +287,8 @@ export default function ArtworkDetailModal({
                                 <button
                                     type="button"
                                     onClick={handleAddComment}
-                                    className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-white text-black hover:bg-zinc-200"
+                                    disabled={commentLoading}
+                                    className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-white text-black hover:bg-zinc-200 disabled:opacity-60"
                                 >
                                     <Send size={18} />
                                 </button>
@@ -234,13 +296,25 @@ export default function ArtworkDetailModal({
                         </div>
                     </div>
 
-                    <div className="mt-4 flex-1 space-y-3 overflow-y-auto pr-1">
-                        {comments.map((comment) => (
-                            <div key={comment.id} className="rounded-2xl bg-zinc-900 p-4">
-                                <p className="font-semibold">{comment.name}</p>
-                                <p className="mt-1 text-sm text-zinc-400">{comment.text}</p>
+                    <div
+                        className="mt-4 min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain border-t border-zinc-800 pt-4 pr-1"
+                        onWheel={(e) => e.stopPropagation()}
+                        onTouchMove={(e) => e.stopPropagation()}
+                    >
+                        {comments.length > 0 ? (
+                            comments.map((comment) => (
+                                <div key={comment.id} className="rounded-2xl bg-zinc-900 p-4">
+                                    <p className="font-semibold">{comment.authorName}</p>
+                                    <p className="mt-1 text-sm text-zinc-400">
+                                        {comment.content}
+                                    </p>
+                                </div>
+                            ))
+                        ) : (
+                            <div className="rounded-2xl bg-zinc-900 p-4 text-sm text-zinc-500">
+                                No comments yet. Be the first to comment.
                             </div>
-                        ))}
+                        )}
                     </div>
                 </div>
             </section>

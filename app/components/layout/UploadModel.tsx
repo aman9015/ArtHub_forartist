@@ -1,62 +1,90 @@
 "use client";
 
-import { currentUser } from "@/data/currentUser";
 import { useState } from "react";
 import { ImagePlus, Upload, X, Type, FileText, Hash } from "lucide-react";
-
-type Artwork = {
-  id: number;
-  title: string;
-  artist: string;
-  username: string;
-  bio: string;
-  image: string;
-};
+import { createClient } from "@/app/lib/supabase";
 
 type UploadModalProps = {
   onClose: () => void;
-  onCreateArtwork: (artwork: Artwork) => void;
+  onCreateArtwork: () => void;
 };
 
 export default function UploadModal({
   onClose,
   onCreateArtwork,
 }: UploadModalProps) {
+  const supabase = createClient();
+
   const [preview, setPreview] = useState<string | null>(null);
+  const [imageFile, setImageFile] = useState<File | null>(null);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [tags, setTags] = useState("");
+  const [loading, setLoading] = useState(false);
 
   function handleImageChange(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
 
     if (!file) return;
 
-    const reader = new FileReader();
-
-    reader.onloadend = () => {
-      setPreview(reader.result as string);
-    };
-
-    reader.readAsDataURL(file);
+    setImageFile(file);
+    setPreview(URL.createObjectURL(file));
   }
 
-  function handlePublish() {
-    if (!preview || !title.trim()) {
+  async function handlePublish() {
+    if (!imageFile || !title.trim()) {
       alert("Please add an image and artwork title.");
       return;
     }
 
-    const newArtwork: Artwork = {
-      id: Date.now(),
-      title: title.trim(),
-      artist: currentUser.artist,
-      username: currentUser.username,
-      bio: description.trim() || currentUser.bio,
-      image: preview,
-    };
+    setLoading(true);
 
-    onCreateArtwork(newArtwork);
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) {
+      setLoading(false);
+      alert("You must be logged in to upload artwork.");
+      return;
+    }
+
+    const fileExt = imageFile.name.split(".").pop();
+    const fileName = `${user.id}-${Date.now()}.${fileExt}`;
+    const filePath = `${user.id}/${fileName}`;
+
+    const { error: uploadError } = await supabase.storage
+      .from("artworks")
+      .upload(filePath, imageFile);
+
+    if (uploadError) {
+      setLoading(false);
+      alert(uploadError.message);
+      return;
+    }
+
+    const { data: publicUrlData } = supabase.storage
+      .from("artworks")
+      .getPublicUrl(filePath);
+
+    const imageUrl = publicUrlData.publicUrl;
+
+    const { error: insertError } = await supabase.from("artworks").insert({
+      user_id: user.id,
+      title: title.trim(),
+      description: description.trim() || tags.trim() || null,
+      image_url: imageUrl,
+    });
+
+    setLoading(false);
+
+    if (insertError) {
+      alert(insertError.message);
+      return;
+    }
+
+    onCreateArtwork();
+    onClose();
   }
 
   return (
@@ -141,10 +169,11 @@ export default function UploadModal({
           <button
             type="button"
             onClick={handlePublish}
-            className="flex w-full items-center justify-center gap-2 rounded-full bg-white py-3 font-bold text-black transition hover:bg-zinc-200"
+            disabled={loading}
+            className="flex w-full items-center justify-center gap-2 rounded-full bg-white py-3 font-bold text-black transition hover:bg-zinc-200 disabled:opacity-60"
           >
             <Upload size={18} />
-            Publish Artwork
+            {loading ? "Publishing..." : "Publish Artwork"}
           </button>
         </div>
       </section>

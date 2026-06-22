@@ -1,4 +1,3 @@
-import { artworks } from "@/data/artwork";
 import ProfilePageClient from "./ProfilePageClient";
 
 type Props = {
@@ -10,10 +9,5 @@ type Props = {
 export default async function ProfilePage({ params }: Props) {
     const { username } = await params;
 
-    return (
-        <ProfilePageClient
-            username={username}
-            initialArtworks={artworks}
-        />
-    );
+    return <ProfilePageClient username={username} />;
 }

@@ -5,18 +5,20 @@ import ArtworkCard from "@/app/components/ArtworkCard";
 import Topbar from "./Topbar";
 
 type Artwork = {
-  id: number;
+  id: string;
   title: string;
   artist: string;
   username: string;
   bio: string;
   image: string;
+  ownerId: string;
+  avatarUrl: string | null;
 };
 
 type FeedProps = {
   onUploadClick: () => void;
   artworks: Artwork[];
-  onDeleteArtwork: (id: number) => void;
+  onDeleteArtwork: (id: string) => void;
 };
 
 export default function Feed({
@@ -72,6 +74,8 @@ export default function Feed({
             title={artwork.title}
             artist={artwork.artist}
             username={artwork.username}
+            ownerId={artwork.ownerId}
+            avatarUrl={artwork.avatarUrl}
             onDelete={onDeleteArtwork}
           />
         ))
@@ -79,7 +83,7 @@ export default function Feed({
         <div className="rounded-3xl border border-zinc-800 bg-zinc-950 p-10 text-center">
           <h2 className="text-xl font-bold">No artwork found</h2>
           <p className="mt-2 text-zinc-400">
-            Try searching for another artwork or artist.
+            Upload the first real artwork to ArtHub.
           </p>
         </div>
       )}

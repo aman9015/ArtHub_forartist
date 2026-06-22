@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { addNotification } from "@/app/lib/storage";
+import { createClient } from "@/app/lib/supabase";
 
 type Props = {
   username: string;
@@ -10,104 +12,168 @@ type Props = {
   liked: number;
 };
 
+type Profile = {
+  id: string;
+  username: string;
+};
+
 export default function ProfileStats({
   username,
   artworks,
   saved,
   liked,
 }: Props) {
-  const [followers, setFollowers] = useState(2400);
-  const [following, setFollowing] = useState(89);
+  const supabase = createClient();
+  const router = useRouter();
+
+  const [followers, setFollowers] = useState(0);
+  const [following, setFollowing] = useState(0);
   const [isFollowing, setIsFollowing] = useState(false);
+  const [isFollowedByViewedUser, setIsFollowedByViewedUser] = useState(false);
+  const [isOwnProfile, setIsOwnProfile] = useState(false);
+  const [myProfileId, setMyProfileId] = useState<string | null>(null);
+  const [viewedProfileId, setViewedProfileId] = useState<string | null>(null);
+
+  const isMutualFollow = isFollowing && isFollowedByViewedUser;
+
+  async function loadFollowState() {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) return;
+
+    const { data: myProfile } = await supabase
+      .from("profiles")
+      .select("id, username")
+      .eq("id", user.id)
+      .single();
+
+    const { data: viewedProfile } = await supabase
+      .from("profiles")
+      .select("id, username")
+      .eq("username", username)
+      .single();
+
+    if (!myProfile || !viewedProfile) return;
+
+    const my = myProfile as Profile;
+    const viewed = viewedProfile as Profile;
+
+    setMyProfileId(my.id);
+    setViewedProfileId(viewed.id);
+    setIsOwnProfile(my.id === viewed.id);
+
+    const { count: followersCount } = await supabase
+      .from("follows")
+      .select("*", { count: "exact", head: true })
+      .eq("following_id", viewed.id);
+
+    const { count: followingCount } = await supabase
+      .from("follows")
+      .select("*", { count: "exact", head: true })
+      .eq("follower_id", viewed.id);
+
+    const { data: myFollowRow } = await supabase
+      .from("follows")
+      .select("id")
+      .eq("follower_id", my.id)
+      .eq("following_id", viewed.id)
+      .maybeSingle();
+
+    const { data: theirFollowRow } = await supabase
+      .from("follows")
+      .select("id")
+      .eq("follower_id", viewed.id)
+      .eq("following_id", my.id)
+      .maybeSingle();
+
+    setFollowers(followersCount || 0);
+    setFollowing(followingCount || 0);
+    setIsFollowing(Boolean(myFollowRow));
+    setIsFollowedByViewedUser(Boolean(theirFollowRow));
+  }
 
   useEffect(() => {
-    const followedUsers: string[] = JSON.parse(
-      localStorage.getItem("arthub_following") || "[]"
-    );
-
-    const alreadyFollowing = followedUsers.includes(username);
-
-    setIsFollowing(alreadyFollowing);
-
-    const storedFollowers = localStorage.getItem(
-      `arthub_followers_${username}`
-    );
-
-    const storedFollowing = localStorage.getItem(
-      "arthub_total_following"
-    );
-
-    if (storedFollowers) {
-      setFollowers(Number(storedFollowers));
-    } else {
-      setFollowers(alreadyFollowing ? 2401 : 2400);
-    }
-
-    if (storedFollowing) {
-      setFollowing(Number(storedFollowing));
-    }
+    loadFollowState();
   }, [username]);
 
-  function handleFollow() {
-    const followedUsers: string[] = JSON.parse(
-      localStorage.getItem("arthub_following") || "[]"
-    );
+  async function handleFollow() {
+    if (!myProfileId || !viewedProfileId || isOwnProfile) return;
 
-    let updatedUsers: string[];
+    if (isFollowing) {
+      const { error } = await supabase
+        .from("follows")
+        .delete()
+        .eq("follower_id", myProfileId)
+        .eq("following_id", viewedProfileId);
 
-    if (followedUsers.includes(username)) {
-      updatedUsers = followedUsers.filter(
-        (user) => user !== username
-      );
+      if (error) {
+        alert(error.message);
+        return;
+      }
 
-      const newFollowers = Math.max(followers - 1, 0);
-      const newFollowing = Math.max(following - 1, 0);
-
-      setFollowers(newFollowers);
-      setFollowing(newFollowing);
       setIsFollowing(false);
-
-      localStorage.setItem(
-        `arthub_followers_${username}`,
-        String(newFollowers)
-      );
-
-      localStorage.setItem(
-        "arthub_total_following",
-        String(newFollowing)
-      );
-    } else {
-      updatedUsers = [...followedUsers, username];
-
-      const newFollowers = followers + 1;
-      const newFollowing = following + 1;
-
-      setFollowers(newFollowers);
-      setFollowing(newFollowing);
-      setIsFollowing(true);
-
-      localStorage.setItem(
-        `arthub_followers_${username}`,
-        String(newFollowers)
-      );
-
-      localStorage.setItem(
-        "arthub_total_following",
-        String(newFollowing)
-      );
-
-      addNotification({
-        type: "follow",
-        user: "You",
-        message: "started following",
-        artwork: username,
-      });
+      setFollowers((prev) => Math.max(prev - 1, 0));
+      return;
     }
 
-    localStorage.setItem(
-      "arthub_following",
-      JSON.stringify(updatedUsers)
-    );
+    const { error } = await supabase.from("follows").insert({
+      follower_id: myProfileId,
+      following_id: viewedProfileId,
+    });
+
+    if (error) {
+      alert(error.message);
+      return;
+    }
+
+    setIsFollowing(true);
+    setFollowers((prev) => prev + 1);
+
+    addNotification({
+      type: "follow",
+      user: "You",
+      message: "started following",
+      artwork: username,
+    });
+
+    await loadFollowState();
+  }
+
+  async function handleMessage() {
+    if (!myProfileId || !viewedProfileId || isOwnProfile || !isMutualFollow) {
+      return;
+    }
+
+    const { data: existingConversation } = await supabase
+      .from("conversations")
+      .select("id")
+      .or(
+        `and(user_one.eq.${myProfileId},user_two.eq.${viewedProfileId}),and(user_one.eq.${viewedProfileId},user_two.eq.${myProfileId})`
+      )
+      .maybeSingle();
+
+    if (existingConversation) {
+      router.push(`/messages/${existingConversation.id}`);
+      return;
+    }
+
+    const { data: newConversation, error } = await supabase
+      .from("conversations")
+      .insert({
+        user_one: myProfileId,
+        user_two: viewedProfileId,
+      })
+      .select("id")
+      .single();
+
+    if (error) {
+      alert(error.message);
+      return;
+    }
+
+    router.push(`/messages/${newConversation.id}`);
   }
 
   return (
@@ -129,9 +195,7 @@ export default function ProfileStats({
         </div>
 
         <div>
-          <p className="text-2xl font-bold">
-            {(followers / 1000).toFixed(1)}k
-          </p>
+          <p className="text-2xl font-bold">{followers}</p>
           <p className="text-zinc-400">Followers</p>
         </div>
 
@@ -141,15 +205,30 @@ export default function ProfileStats({
         </div>
       </div>
 
-      <button
-        onClick={handleFollow}
-        className={`rounded-full px-6 py-3 font-semibold transition ${isFollowing
-            ? "border border-zinc-700 bg-zinc-900 text-white hover:bg-zinc-800"
-            : "bg-white text-black hover:bg-zinc-200"
-          }`}
-      >
-        {isFollowing ? "Following" : "Follow"}
-      </button>
+      {!isOwnProfile && (
+        <div className="flex flex-wrap gap-3">
+          {isMutualFollow && (
+            <button
+              type="button"
+              onClick={handleMessage}
+              className="rounded-full border border-zinc-700 px-6 py-3 font-semibold text-white hover:bg-zinc-900"
+            >
+              Message
+            </button>
+          )}
+
+          <button
+            type="button"
+            onClick={handleFollow}
+            className={`rounded-full px-6 py-3 font-semibold transition ${isFollowing
+                ? "border border-zinc-700 bg-zinc-900 text-white hover:bg-zinc-800"
+                : "bg-white text-black hover:bg-zinc-200"
+              }`}
+          >
+            {isFollowing ? "Following" : "Follow"}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

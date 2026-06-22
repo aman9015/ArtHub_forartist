@@ -1,136 +1,151 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import Image from "next/image";
 import Link from "next/link";
+import { useEffect, useMemo, useState } from "react";
+import RequireAuth from "@/app/auth/RequireAuth";
+import { createClient } from "@/app/lib/supabase";
 import {
     ArrowLeft,
     BarChart3,
     Bookmark,
-    Eye,
     Heart,
     ImageIcon,
     MessageCircle,
     Star,
     TrendingUp,
     Users,
+    UserPlus,
 } from "lucide-react";
-import { artworks } from "@/data/artwork";
 
 type Artwork = {
-    id: number;
+    id: string;
+    user_id: string;
     title: string;
-    artist: string;
-    username: string;
-    bio: string;
-    image: string;
+    description: string | null;
+    image_url: string;
+    created_at: string;
 };
 
-type Comment = {
-    id: number;
-    name: string;
-    text: string;
-};
+function DashboardContent() {
+    const supabase = createClient();
 
-export default function DashboardPage() {
-    const [allArtworks, setAllArtworks] = useState<Artwork[]>([]);
-    const [likedIds, setLikedIds] = useState<number[]>([]);
-    const [savedIds, setSavedIds] = useState<number[]>([]);
-    const [commentsMap, setCommentsMap] = useState<Record<string, Comment[]>>({});
+    const [loading, setLoading] = useState(true);
+    const [myUserId, setMyUserId] = useState<string | null>(null);
+    const [myArtworks, setMyArtworks] = useState<Artwork[]>([]);
+    const [totalLikes, setTotalLikes] = useState(0);
+    const [totalSaves, setTotalSaves] = useState(0);
+    const [totalComments, setTotalComments] = useState(0);
+    const [followers, setFollowers] = useState(0);
     const [following, setFollowing] = useState(0);
 
     useEffect(() => {
-        const uploaded: Artwork[] = JSON.parse(
-            localStorage.getItem("arthub_uploads") || "[]"
-        );
+        async function loadDashboard() {
+            setLoading(true);
 
-        const liked: number[] = JSON.parse(
-            localStorage.getItem("arthub_liked_posts") || "[]"
-        );
+            const {
+                data: { user },
+            } = await supabase.auth.getUser();
 
-        const saved: number[] = JSON.parse(
-            localStorage.getItem("arthub_saved_posts") || "[]"
-        );
+            if (!user) {
+                setLoading(false);
+                return;
+            }
 
-        const comments: Record<string, Comment[]> = JSON.parse(
-            localStorage.getItem("arthub_comments") || "{}"
-        );
+            setMyUserId(user.id);
 
-        const followedUsers: string[] = JSON.parse(
-            localStorage.getItem("arthub_following") || "[]"
-        );
+            const { data: artworksData } = await supabase
+                .from("artworks")
+                .select("id, user_id, title, description, image_url, created_at")
+                .eq("user_id", user.id)
+                .order("created_at", { ascending: false });
 
-        setAllArtworks([...uploaded, ...artworks]);
-        setLikedIds(liked);
-        setSavedIds(saved);
-        setCommentsMap(comments);
-        setFollowing(followedUsers.length);
-    }, []);
+            const artworks = (artworksData || []) as Artwork[];
+            setMyArtworks(artworks);
 
-    const totalPosts = allArtworks.length;
-    const totalLikes = likedIds.length;
-    const totalSaves = savedIds.length;
-    const totalComments = Object.values(commentsMap).reduce(
-        (sum, comments) => sum + comments.length,
-        0
-    );
+            const artworkIds = artworks.map((artwork) => artwork.id);
 
-    const totalViews = totalPosts * 327 + totalLikes * 41 + totalSaves * 24;
-    const followers = 2400 + following;
+            if (artworkIds.length > 0) {
+                const { count: likesCount } = await supabase
+                    .from("likes")
+                    .select("*", { count: "exact", head: true })
+                    .in("artwork_id", artworkIds);
+
+                const { count: savesCount } = await supabase
+                    .from("saves")
+                    .select("*", { count: "exact", head: true })
+                    .in("artwork_id", artworkIds);
+
+                const { count: commentsCount } = await supabase
+                    .from("comments")
+                    .select("*", { count: "exact", head: true })
+                    .in("artwork_id", artworkIds);
+
+                setTotalLikes(likesCount || 0);
+                setTotalSaves(savesCount || 0);
+                setTotalComments(commentsCount || 0);
+            }
+
+            const { count: followersCount } = await supabase
+                .from("follows")
+                .select("*", { count: "exact", head: true })
+                .eq("following_id", user.id);
+
+            const { count: followingCount } = await supabase
+                .from("follows")
+                .select("*", { count: "exact", head: true })
+                .eq("follower_id", user.id);
+
+            setFollowers(followersCount || 0);
+            setFollowing(followingCount || 0);
+            setLoading(false);
+        }
+
+        loadDashboard();
+    }, [supabase]);
+
+    const totalPosts = myArtworks.length;
+
     const engagementScore =
         totalPosts === 0
             ? 0
-            : Math.round(((totalLikes + totalSaves + totalComments) / totalPosts) * 10);
+            : Math.min(
+                Math.round(
+                    ((totalLikes + totalSaves + totalComments + followers) /
+                        totalPosts) *
+                    10
+                ),
+                100
+            );
 
     const mostPopularArtwork = useMemo(() => {
-        if (allArtworks.length === 0) return null;
-
-        return [...allArtworks].sort((a, b) => {
-            const scoreA =
-                (likedIds.includes(a.id) ? 2 : 0) +
-                (savedIds.includes(a.id) ? 3 : 0) +
-                (commentsMap[String(a.id)]?.length || 0);
-
-            const scoreB =
-                (likedIds.includes(b.id) ? 2 : 0) +
-                (savedIds.includes(b.id) ? 3 : 0) +
-                (commentsMap[String(b.id)]?.length || 0);
-
-            return scoreB - scoreA;
-        })[0];
-    }, [allArtworks, likedIds, savedIds, commentsMap]);
+        if (myArtworks.length === 0) return null;
+        return myArtworks[0];
+    }, [myArtworks]);
 
     const stats = [
+        { label: "Total Posts", value: totalPosts, icon: <ImageIcon size={22} /> },
+        { label: "Likes Received", value: totalLikes, icon: <Heart size={22} /> },
+        { label: "Saves Received", value: totalSaves, icon: <Bookmark size={22} /> },
         {
-            label: "Total Posts",
-            value: totalPosts,
-            icon: <ImageIcon size={22} />,
-        },
-        {
-            label: "Total Likes",
-            value: totalLikes,
-            icon: <Heart size={22} />,
-        },
-        {
-            label: "Total Saves",
-            value: totalSaves,
-            icon: <Bookmark size={22} />,
-        },
-        {
-            label: "Comments",
+            label: "Comments Received",
             value: totalComments,
             icon: <MessageCircle size={22} />,
         },
-        {
-            label: "Followers",
-            value: `${(followers / 1000).toFixed(1)}k`,
-            icon: <Users size={22} />,
-        },
-        {
-            label: "Views",
-            value: totalViews,
-            icon: <Eye size={22} />,
-        },
+        { label: "Followers", value: followers, icon: <Users size={22} /> },
+        { label: "Following", value: following, icon: <UserPlus size={22} /> },
     ];
+
+    if (loading) {
+        return (
+            <main className="flex min-h-screen items-center justify-center bg-black text-white">
+                <div className="rounded-3xl border border-zinc-800 bg-zinc-950 p-8 text-center">
+                    <h1 className="text-xl font-bold">Loading dashboard...</h1>
+                    <p className="mt-2 text-zinc-400">Fetching real Supabase stats.</p>
+                </div>
+            </main>
+        );
+    }
 
     return (
         <main className="min-h-screen bg-black px-4 py-8 text-white">
@@ -142,7 +157,7 @@ export default function DashboardPage() {
                             Artist Dashboard
                         </h1>
                         <p className="mt-2 text-zinc-400">
-                            Track your ArtHub growth, engagement, and artwork performance.
+                            Real analytics from your ArtHub profile.
                         </p>
                     </div>
 
@@ -179,7 +194,7 @@ export default function DashboardPage() {
                         </h2>
 
                         <p className="mt-2 text-zinc-400">
-                            Based on likes, saves, comments, and total artwork activity.
+                            Based on real likes, saves, comments, followers, and posts.
                         </p>
 
                         <div className="mt-8">
@@ -191,7 +206,7 @@ export default function DashboardPage() {
                             <div className="mt-5 h-4 overflow-hidden rounded-full bg-zinc-900">
                                 <div
                                     className="h-full rounded-full bg-white"
-                                    style={{ width: `${Math.min(engagementScore, 100)}%` }}
+                                    style={{ width: `${engagementScore}%` }}
                                 />
                             </div>
                         </div>
@@ -200,34 +215,46 @@ export default function DashboardPage() {
                     <div className="rounded-3xl border border-zinc-800 bg-zinc-950 p-6">
                         <h2 className="flex items-center gap-2 text-2xl font-bold">
                             <Star size={24} />
-                            Most Popular Artwork
+                            Latest Artwork
                         </h2>
 
                         {mostPopularArtwork ? (
                             <div className="mt-6">
-                                <div className="h-48 rounded-3xl bg-gradient-to-br from-purple-500 to-pink-500" />
+                                <div className="relative h-48 overflow-hidden rounded-3xl bg-zinc-900">
+                                    <Image
+                                        src={mostPopularArtwork.image_url}
+                                        alt={mostPopularArtwork.title}
+                                        fill
+                                        unoptimized
+                                        sizes="400px"
+                                        className="object-cover"
+                                    />
+                                </div>
 
                                 <h3 className="mt-5 text-xl font-bold">
                                     {mostPopularArtwork.title}
                                 </h3>
 
-                                <p className="mt-1 text-zinc-400">
-                                    by {mostPopularArtwork.artist}
-                                </p>
-
-                                <p className="mt-4 text-sm text-zinc-500">
-                                    This artwork currently has the strongest engagement based on
-                                    likes, saves, and comments.
+                                <p className="mt-2 text-sm text-zinc-500">
+                                    Your newest uploaded artwork.
                                 </p>
                             </div>
                         ) : (
                             <p className="mt-6 text-zinc-400">
-                                Upload artwork to see your top performer.
+                                Upload artwork to see dashboard insights.
                             </p>
                         )}
                     </div>
                 </div>
             </section>
         </main>
+    );
+}
+
+export default function DashboardPage() {
+    return (
+        <RequireAuth>
+            <DashboardContent />
+        </RequireAuth>
     );
 }
