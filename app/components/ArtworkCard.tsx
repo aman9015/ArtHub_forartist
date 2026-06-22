@@ -3,7 +3,7 @@
 import { createNotification } from "@/app/lib/notifications";
 import Image from "next/image";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
     Heart,
     MessageCircle,
@@ -35,14 +35,17 @@ export default function ArtworkCard({
     avatarUrl,
     onDelete,
 }: ArtworkCardProps) {
-    const supabase = createClient();
+    const supabase = useMemo(() => createClient(), []);
 
     const [isDetailOpen, setIsDetailOpen] = useState(false);
     const [liked, setLiked] = useState(false);
     const [saved, setSaved] = useState(false);
     const [following, setFollowing] = useState(false);
+
     const [likes, setLikes] = useState(0);
     const [saves, setSaves] = useState(0);
+    const [commentCount, setCommentCount] = useState(0);
+
     const [currentUserId, setCurrentUserId] = useState<string | null>(null);
 
     const isOwner = currentUserId === ownerId;
@@ -55,52 +58,67 @@ export default function ArtworkCard({
 
             setCurrentUserId(user?.id || null);
 
-            const { count: likeCount } = await supabase
-                .from("likes")
-                .select("*", { count: "exact", head: true })
-                .eq("artwork_id", id);
+            const [
+                { count: likeCount },
+                { count: saveCount },
+                { count: commentsCount },
+            ] = await Promise.all([
+                supabase
+                    .from("likes")
+                    .select("*", { count: "exact", head: true })
+                    .eq("artwork_id", id),
 
-            const { count: saveCount } = await supabase
-                .from("saves")
-                .select("*", { count: "exact", head: true })
-                .eq("artwork_id", id);
+                supabase
+                    .from("saves")
+                    .select("*", { count: "exact", head: true })
+                    .eq("artwork_id", id),
+
+                supabase
+                    .from("comments")
+                    .select("*", { count: "exact", head: true })
+                    .eq("artwork_id", id),
+            ]);
 
             setLikes(likeCount || 0);
             setSaves(saveCount || 0);
+            setCommentCount(commentsCount || 0);
 
-            if (user) {
-                const { data: existingLike } = await supabase
-                    .from("likes")
-                    .select("id")
-                    .eq("user_id", user.id)
-                    .eq("artwork_id", id)
-                    .maybeSingle();
+            if (!user) return;
 
-                const { data: existingSave } = await supabase
-                    .from("saves")
-                    .select("id")
-                    .eq("user_id", user.id)
-                    .eq("artwork_id", id)
-                    .maybeSingle();
+            const { data: existingLike } = await supabase
+                .from("likes")
+                .select("id")
+                .eq("user_id", user.id)
+                .eq("artwork_id", id)
+                .maybeSingle();
 
-                const { data: existingFollow } = await supabase
-                    .from("follows")
-                    .select("id")
-                    .eq("follower_id", user.id)
-                    .eq("following_id", ownerId)
-                    .maybeSingle();
+            const { data: existingSave } = await supabase
+                .from("saves")
+                .select("id")
+                .eq("user_id", user.id)
+                .eq("artwork_id", id)
+                .maybeSingle();
 
-                setLiked(Boolean(existingLike));
-                setSaved(Boolean(existingSave));
-                setFollowing(Boolean(existingFollow));
-            }
+            const { data: existingFollow } = await supabase
+                .from("follows")
+                .select("id")
+                .eq("follower_id", user.id)
+                .eq("following_id", ownerId)
+                .maybeSingle();
+
+            setLiked(Boolean(existingLike));
+            setSaved(Boolean(existingSave));
+            setFollowing(Boolean(existingFollow));
         }
 
-        loadCardState();
+        void loadCardState();
     }, [id, ownerId, supabase]);
 
     async function handleLike() {
-        if (!currentUserId) return alert("Please login first.");
+        if (!currentUserId) {
+            alert("Please login first.");
+            return;
+        }
 
         if (liked) {
             const { error } = await supabase
@@ -109,10 +127,13 @@ export default function ArtworkCard({
                 .eq("user_id", currentUserId)
                 .eq("artwork_id", id);
 
-            if (error) return alert(error.message);
+            if (error) {
+                alert(error.message);
+                return;
+            }
 
             setLiked(false);
-            setLikes((prev) => Math.max(prev - 1, 0));
+            setLikes((previous) => Math.max(previous - 1, 0));
             return;
         }
 
@@ -121,10 +142,13 @@ export default function ArtworkCard({
             artwork_id: id,
         });
 
-        if (error) return alert(error.message);
+        if (error) {
+            alert(error.message);
+            return;
+        }
 
         setLiked(true);
-        setLikes((prev) => prev + 1);
+        setLikes((previous) => previous + 1);
 
         await createNotification({
             userId: ownerId,
@@ -136,7 +160,10 @@ export default function ArtworkCard({
     }
 
     async function handleSave() {
-        if (!currentUserId) return alert("Please login first.");
+        if (!currentUserId) {
+            alert("Please login first.");
+            return;
+        }
 
         if (saved) {
             const { error } = await supabase
@@ -145,10 +172,13 @@ export default function ArtworkCard({
                 .eq("user_id", currentUserId)
                 .eq("artwork_id", id);
 
-            if (error) return alert(error.message);
+            if (error) {
+                alert(error.message);
+                return;
+            }
 
             setSaved(false);
-            setSaves((prev) => Math.max(prev - 1, 0));
+            setSaves((previous) => Math.max(previous - 1, 0));
             return;
         }
 
@@ -157,10 +187,13 @@ export default function ArtworkCard({
             artwork_id: id,
         });
 
-        if (error) return alert(error.message);
+        if (error) {
+            alert(error.message);
+            return;
+        }
 
         setSaved(true);
-        setSaves((prev) => prev + 1);
+        setSaves((previous) => previous + 1);
 
         await createNotification({
             userId: ownerId,
@@ -172,7 +205,11 @@ export default function ArtworkCard({
     }
 
     async function handleFollow() {
-        if (!currentUserId) return alert("Please login first.");
+        if (!currentUserId) {
+            alert("Please login first.");
+            return;
+        }
+
         if (isOwner) return;
 
         if (following) {
@@ -182,7 +219,10 @@ export default function ArtworkCard({
                 .eq("follower_id", currentUserId)
                 .eq("following_id", ownerId);
 
-            if (error) return alert(error.message);
+            if (error) {
+                alert(error.message);
+                return;
+            }
 
             setFollowing(false);
             return;
@@ -193,7 +233,10 @@ export default function ArtworkCard({
             following_id: ownerId,
         });
 
-        if (error) return alert(error.message);
+        if (error) {
+            alert(error.message);
+            return;
+        }
 
         setFollowing(true);
 
@@ -214,7 +257,10 @@ export default function ArtworkCard({
         <>
             <article className="overflow-hidden rounded-3xl border border-zinc-800 bg-zinc-950">
                 <div className="flex items-center justify-between gap-4 p-5">
-                    <Link href={`/profile/${username}`} className="flex items-center gap-3">
+                    <Link
+                        href={`/profile/${username}`}
+                        className="flex items-center gap-3"
+                    >
                         {avatarUrl ? (
                             <img
                                 src={avatarUrl}
@@ -237,7 +283,7 @@ export default function ArtworkCard({
                         {!isOwner && (
                             <button
                                 type="button"
-                                onClick={handleFollow}
+                                onClick={() => void handleFollow()}
                                 className={`rounded-full px-4 py-2 text-sm ${following
                                         ? "border border-zinc-700 bg-zinc-900 text-white"
                                         : "border border-zinc-700 hover:bg-zinc-800"
@@ -287,7 +333,7 @@ export default function ArtworkCard({
                         <div className="flex gap-5 text-zinc-200">
                             <button
                                 type="button"
-                                onClick={handleLike}
+                                onClick={() => void handleLike()}
                                 className={`flex items-center gap-2 hover:text-red-400 ${liked ? "text-red-400" : ""
                                     }`}
                             >
@@ -301,7 +347,7 @@ export default function ArtworkCard({
                                 className="flex items-center gap-2 hover:text-blue-400"
                             >
                                 <MessageCircle size={21} />
-                                <span>0</span>
+                                <span>{commentCount}</span>
                             </button>
 
                             <button
@@ -315,7 +361,7 @@ export default function ArtworkCard({
 
                         <button
                             type="button"
-                            onClick={handleSave}
+                            onClick={() => void handleSave()}
                             className={`flex items-center gap-1 hover:text-yellow-400 ${saved ? "text-yellow-400" : ""
                                 }`}
                         >
@@ -337,6 +383,7 @@ export default function ArtworkCard({
                     saved={saved}
                     onLike={handleLike}
                     onSave={handleSave}
+                    onCommentsChange={setCommentCount}
                     onClose={() => setIsDetailOpen(false)}
                 />
             )}
