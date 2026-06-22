@@ -1,11 +1,20 @@
+
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import Feed from "@/app/components/layout/Feed";
 import Trending from "@/app/components/layout/Trending";
 import { createClient } from "@/app/lib/supabase";
 import { addNotification } from "@/app/lib/storage";
+
+const PAGE_SIZE = 12;
 
 type FeedType = "following" | "discover";
 type DiscoverMode = "recent" | "trending";
@@ -50,11 +59,38 @@ type FeedRow = {
   artist_username: string;
   artist_about: string | null;
   artist_avatar_url: string | null;
+
+  like_count: number;
+  comment_count: number;
+  repost_count: number;
+  save_count: number;
+
+  viewer_liked: boolean;
+  viewer_saved: boolean;
+  viewer_reposted: boolean;
+  viewer_follows_artist: boolean;
+
+  trending_score?: number | string | null;
 };
 
-type LoadFeedOptions = {
+type FeedCursor = {
+  eventCreatedAt: string;
+  eventId: string;
+  trendingScore: number | null;
+};
+
+type LoadPageOptions = {
+  reset?: boolean;
   scrollToTop?: boolean;
 };
+
+function getTrendingScore(value: number | string | null | undefined) {
+  if (value === null || value === undefined) return null;
+
+  const score = Number(value);
+
+  return Number.isFinite(score) ? score : null;
+}
 
 export default function ExplorePage() {
   const supabase = useMemo(() => createClient(), []);
@@ -64,64 +100,145 @@ export default function ExplorePage() {
     useState<DiscoverMode>("recent");
 
   const [feedArtworks, setFeedArtworks] = useState<FeedArtwork[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [initialLoading, setInitialLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
 
-  const loadFeed = useCallback(
-    async ({ scrollToTop = false }: LoadFeedOptions = {}) => {
-      setLoading(true);
+  const cursorRef = useRef<FeedCursor | null>(null);
+  const requestVersionRef = useRef(0);
+
+  const initialLoadingRef = useRef(true);
+  const loadingMoreRef = useRef(false);
+  const hasMoreRef = useRef(true);
+
+  const scrollOnNextResetRef = useRef(false);
+
+  const activeFeedKey =
+    activeFeed === "following"
+      ? "following"
+      : `discover-${discoverMode}`;
+
+  const loadPage = useCallback(
+    async ({
+      reset = false,
+      scrollToTop = false,
+    }: LoadPageOptions = {}) => {
+      if (
+        !reset &&
+        (initialLoadingRef.current ||
+          loadingMoreRef.current ||
+          !hasMoreRef.current)
+      ) {
+        return;
+      }
+
+      const requestVersion = requestVersionRef.current + 1;
+      requestVersionRef.current = requestVersion;
+
+      const requestedCursor = reset ? null : cursorRef.current;
+
+      if (reset) {
+        initialLoadingRef.current = true;
+        loadingMoreRef.current = false;
+        hasMoreRef.current = true;
+
+        setInitialLoading(true);
+        setLoadingMore(false);
+        setHasMore(true);
+      } else {
+        loadingMoreRef.current = true;
+        setLoadingMore(true);
+      }
 
       const response =
         activeFeed === "following"
           ? await supabase.rpc("get_following_feed", {
-              p_limit: 30,
-              p_before: null,
+              p_limit: PAGE_SIZE,
+              p_before: requestedCursor?.eventCreatedAt ?? null,
+              p_before_id: requestedCursor?.eventId ?? null,
             })
           : await supabase.rpc("get_discover_feed", {
               p_mode: discoverMode,
-              p_limit: 30,
-              p_before: null,
+              p_limit: PAGE_SIZE,
+              p_before: requestedCursor?.eventCreatedAt ?? null,
+              p_before_id: requestedCursor?.eventId ?? null,
+              p_before_score:
+                discoverMode === "trending"
+                  ? requestedCursor?.trendingScore ?? null
+                  : null,
             });
+
+      if (requestVersion !== requestVersionRef.current) {
+        return;
+      }
 
       const { data, error } = response;
 
       if (error) {
         alert(error.message);
-        setLoading(false);
         return;
       }
 
-      const formattedFeed: FeedArtwork[] = ((data || []) as FeedRow[]).map(
-        (item) => {
-          const isFollowingRepost =
-            activeFeed === "following" && item.event_type === "repost";
+      const rawRows = (data || []) as FeedRow[];
 
-          return {
-            feedId: item.event_id,
-            id: item.artwork_id,
-            title: item.artwork_title,
-            artist: item.artist_name || "Unknown Artist",
-            username: item.artist_username || "unknown",
-            bio: item.artwork_description || item.artist_about || "",
-            image: item.artwork_image_url,
-            ownerId: item.artist_id,
-            avatarUrl: item.artist_avatar_url || null,
-            activityAt: item.event_created_at,
+      const formattedFeed: FeedArtwork[] = rawRows.map((item) => {
+        const isFollowingRepost =
+          activeFeed === "following" && item.event_type === "repost";
 
-            repostedBy: isFollowingRepost
-              ? {
-                  name: item.actor_name || "Unknown User",
-                  username: item.actor_username || "unknown",
-                  avatarUrl: item.actor_avatar_url || null,
-                }
-              : undefined,
-          };
-        }
-      );
+        return {
+          feedId: item.event_id,
+          id: item.artwork_id,
+          title: item.artwork_title,
+          artist: item.artist_name || "Unknown Artist",
+          username: item.artist_username || "unknown",
+          bio: item.artwork_description || item.artist_about || "",
+          image: item.artwork_image_url,
+          ownerId: item.artist_id,
+          avatarUrl: item.artist_avatar_url || null,
+          activityAt: item.event_created_at,
 
-      setFeedArtworks(formattedFeed);
-      setLoading(false);
+          repostedBy: isFollowingRepost
+            ? {
+                name: item.actor_name || "Unknown User",
+                username: item.actor_username || "unknown",
+                avatarUrl: item.actor_avatar_url || null,
+              }
+            : undefined,
+        };
+      });
 
-      window.dispatchEvent(new Event("arthub:feed-refreshed"));
+      const lastItem = rawRows.at(-1);
+
+      cursorRef.current = lastItem
+        ? {
+            eventCreatedAt: lastItem.event_created_at,
+            eventId: lastItem.event_id,
+            trendingScore: getTrendingScore(lastItem.trending_score),
+          }
+        : null;
+
+      const moreItemsExist = rawRows.length === PAGE_SIZE;
+
+      hasMoreRef.current = moreItemsExist;
+      setHasMore(moreItemsExist);
+
+      if (reset) {
+        setFeedArtworks(formattedFeed);
+
+        window.dispatchEvent(new Event("arthub:feed-refreshed"));
+      } else {
+        setFeedArtworks((previous) => {
+          const knownFeedIds = new Set(
+            previous.map((artwork) => artwork.feedId)
+          );
+
+          const newItems = formattedFeed.filter(
+            (artwork) => !knownFeedIds.has(artwork.feedId)
+          );
+
+          return [...previous, ...newItems];
+        });
+      }
 
       if (scrollToTop) {
         window.requestAnimationFrame(() => {
@@ -131,72 +248,79 @@ export default function ExplorePage() {
           });
         });
       }
+
+      if (requestVersion === requestVersionRef.current) {
+        initialLoadingRef.current = false;
+        loadingMoreRef.current = false;
+
+        setInitialLoading(false);
+        setLoadingMore(false);
+      }
     },
     [activeFeed, discoverMode, supabase]
   );
 
   useEffect(() => {
-    void loadFeed();
+    const shouldScrollToTop = scrollOnNextResetRef.current;
+    scrollOnNextResetRef.current = false;
 
-    function refreshFromExploreButton() {
-      void loadFeed({ scrollToTop: true });
+    cursorRef.current = null;
+
+    void loadPage({
+      reset: true,
+      scrollToTop: shouldScrollToTop,
+    });
+  }, [activeFeedKey, loadPage]);
+
+  useEffect(() => {
+    function refreshFeedFromExploreIcon() {
+      void loadPage({
+        reset: true,
+        scrollToTop: true,
+      });
     }
 
-    function refreshAfterArtworkActivity() {
-      void loadFeed();
-    }
-
-    window.addEventListener("arthub:refresh-feed", refreshFromExploreButton);
     window.addEventListener(
-      "arthub:artwork-created",
-      refreshAfterArtworkActivity
-    );
-    window.addEventListener(
-      "arthub:repost-changed",
-      refreshAfterArtworkActivity
+      "arthub:refresh-feed",
+      refreshFeedFromExploreIcon
     );
 
     return () => {
       window.removeEventListener(
         "arthub:refresh-feed",
-        refreshFromExploreButton
-      );
-      window.removeEventListener(
-        "arthub:artwork-created",
-        refreshAfterArtworkActivity
-      );
-      window.removeEventListener(
-        "arthub:repost-changed",
-        refreshAfterArtworkActivity
+        refreshFeedFromExploreIcon
       );
     };
-  }, [loadFeed]);
+  }, [loadPage]);
 
-  function scrollToTop() {
-    window.scrollTo({
-      top: 0,
-      behavior: "smooth",
-    });
-  }
+  const handleLoadMore = useCallback(() => {
+    void loadPage({ reset: false });
+  }, [loadPage]);
 
   function handleFeedChange(nextFeed: FeedType) {
     if (nextFeed === activeFeed) {
-      void loadFeed({ scrollToTop: true });
+      void loadPage({
+        reset: true,
+        scrollToTop: true,
+      });
       return;
     }
 
+    scrollOnNextResetRef.current = true;
     setActiveFeed(nextFeed);
-    scrollToTop();
   }
 
   function handleDiscoverModeChange(nextMode: DiscoverMode) {
     if (nextMode === discoverMode) {
-      void loadFeed({ scrollToTop: true });
+      void loadPage({
+        reset: true,
+        scrollToTop: true,
+      });
       return;
     }
 
+    scrollOnNextResetRef.current = true;
     setDiscoverMode(nextMode);
-    scrollToTop();
   }
 
   function openGlobalUpload() {
@@ -230,7 +354,10 @@ export default function ExplorePage() {
       });
     }
 
-    await loadFeed({ scrollToTop: true });
+    await loadPage({
+      reset: true,
+      scrollToTop: true,
+    });
   }
 
   return (
@@ -240,11 +367,14 @@ export default function ExplorePage() {
           onUploadClick={openGlobalUpload}
           artworks={feedArtworks}
           onDeleteArtwork={handleDeleteArtwork}
-          loading={loading}
+          initialLoading={initialLoading}
+          loadingMore={loadingMore}
+          hasMore={hasMore}
           activeFeed={activeFeed}
           discoverMode={discoverMode}
           onFeedChange={handleFeedChange}
           onDiscoverModeChange={handleDiscoverModeChange}
+          onLoadMore={handleLoadMore}
         />
       </section>
 
@@ -254,3 +384,4 @@ export default function ExplorePage() {
     </div>
   );
 }
+

@@ -1,6 +1,7 @@
+
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import ArtworkCard from "@/app/components/ArtworkCard";
 import Topbar from "./Topbar";
 
@@ -31,29 +32,70 @@ type FeedProps = {
   artworks: Artwork[];
   onDeleteArtwork: (id: string) => void;
 
-  loading?: boolean;
+  initialLoading?: boolean;
+  loadingMore?: boolean;
+  hasMore?: boolean;
+
   activeFeed?: FeedType;
   discoverMode?: DiscoverMode;
 
   onFeedChange?: (feed: FeedType) => void;
   onDiscoverModeChange?: (mode: DiscoverMode) => void;
+  onLoadMore?: () => void;
 };
 
 export default function Feed({
   onUploadClick,
   artworks,
   onDeleteArtwork,
-  loading = false,
+  initialLoading = false,
+  loadingMore = false,
+  hasMore = false,
   activeFeed = "following",
   discoverMode = "recent",
   onFeedChange,
   onDiscoverModeChange,
+  onLoadMore,
 }: FeedProps) {
   const [searchQuery, setSearchQuery] = useState("");
+  const loadMoreSentinelRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     setSearchQuery("");
   }, [activeFeed, discoverMode]);
+
+  useEffect(() => {
+    const sentinel = loadMoreSentinelRef.current;
+
+    if (
+      !sentinel ||
+      !hasMore ||
+      initialLoading ||
+      loadingMore ||
+      !onLoadMore
+    ) {
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          onLoadMore();
+        }
+      },
+      {
+        root: null,
+        rootMargin: "650px 0px",
+        threshold: 0.01,
+      }
+    );
+
+    observer.observe(sentinel);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [hasMore, initialLoading, loadingMore, onLoadMore]);
 
   const filteredArtworks = useMemo(() => {
     const query = searchQuery.toLowerCase().trim();
@@ -110,9 +152,9 @@ export default function Feed({
 
       <section className="rounded-3xl border border-zinc-800 bg-zinc-950 p-5">
         <div className="flex flex-col gap-4">
-          <div className="flex flex-col gap-1">
+          <div>
             <h1 className="text-2xl font-bold">{heading}</h1>
-            <p className="text-zinc-400">{description}</p>
+            <p className="mt-1 text-zinc-400">{description}</p>
           </div>
 
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -172,7 +214,7 @@ export default function Feed({
           </div>
         </div>
 
-        {searchQuery && !loading && (
+        {searchQuery && !initialLoading && (
           <p className="mt-4 text-sm text-zinc-500">
             Showing {filteredArtworks.length} result
             {filteredArtworks.length !== 1 ? "s" : ""} for "{searchQuery}"
@@ -180,7 +222,7 @@ export default function Feed({
         )}
       </section>
 
-      {loading ? (
+      {initialLoading ? (
         <div className="rounded-3xl border border-zinc-800 bg-zinc-950 p-10 text-center">
           <h2 className="text-xl font-bold">Loading artwork...</h2>
           <p className="mt-2 text-sm text-zinc-500">
@@ -188,20 +230,42 @@ export default function Feed({
           </p>
         </div>
       ) : filteredArtworks.length > 0 ? (
-        filteredArtworks.map((artwork) => (
-          <ArtworkCard
-            key={`${activeFeed}-${artwork.feedId || artwork.id}`}
-            id={artwork.id}
-            image={artwork.image}
-            title={artwork.title}
-            artist={artwork.artist}
-            username={artwork.username}
-            ownerId={artwork.ownerId}
-            avatarUrl={artwork.avatarUrl}
-            repostedBy={artwork.repostedBy}
-            onDelete={onDeleteArtwork}
-          />
-        ))
+        <>
+          {filteredArtworks.map((artwork) => (
+            <ArtworkCard
+              key={`${activeFeed}-${artwork.feedId || artwork.id}`}
+              id={artwork.id}
+              image={artwork.image}
+              title={artwork.title}
+              artist={artwork.artist}
+              username={artwork.username}
+              ownerId={artwork.ownerId}
+              avatarUrl={artwork.avatarUrl}
+              repostedBy={artwork.repostedBy}
+              onDelete={onDeleteArtwork}
+            />
+          ))}
+
+          <div
+            ref={loadMoreSentinelRef}
+            className="flex min-h-16 items-center justify-center py-4"
+            aria-live="polite"
+          >
+            {loadingMore ? (
+              <span className="text-sm text-zinc-400">
+                Loading more artwork...
+              </span>
+            ) : hasMore ? (
+              <span className="text-xs text-zinc-600">
+                Keep scrolling for more
+              </span>
+            ) : (
+              <span className="text-xs text-zinc-600">
+                You&apos;re all caught up.
+              </span>
+            )}
+          </div>
+        </>
       ) : (
         <div className="rounded-3xl border border-zinc-800 bg-zinc-950 p-10 text-center">
           <h2 className="text-xl font-bold">{emptyTitle}</h2>
@@ -211,3 +275,4 @@ export default function Feed({
     </section>
   );
 }
+
