@@ -25,12 +25,23 @@ type Artwork = {
   ownerId: string;
   avatarUrl: string | null;
   repostedBy?: RepostedBy;
+
+  likeCount: number;
+  commentCount: number;
+  repostCount: number;
+  saveCount: number;
+
+  viewerLiked: boolean;
+  viewerSaved: boolean;
+  viewerReposted: boolean;
+  viewerFollowsArtist: boolean;
 };
 
 type FeedProps = {
   onUploadClick: () => void;
   artworks: Artwork[];
   onDeleteArtwork: (id: string) => void;
+  viewerUserId: string | null;
 
   initialLoading?: boolean;
   loadingMore?: boolean;
@@ -48,6 +59,7 @@ export default function Feed({
   onUploadClick,
   artworks,
   onDeleteArtwork,
+  viewerUserId,
   initialLoading = false,
   loadingMore = false,
   hasMore = false,
@@ -242,6 +254,15 @@ export default function Feed({
               ownerId={artwork.ownerId}
               avatarUrl={artwork.avatarUrl}
               repostedBy={artwork.repostedBy}
+              viewerUserId={viewerUserId}
+              initialLikes={artwork.likeCount}
+              initialComments={artwork.commentCount}
+              initialReposts={artwork.repostCount}
+              initialSaves={artwork.saveCount}
+              initialLiked={artwork.viewerLiked}
+              initialSaved={artwork.viewerSaved}
+              initialReposted={artwork.viewerReposted}
+              initialFollowing={artwork.viewerFollowsArtist}
               onDelete={onDeleteArtwork}
             />
           ))}

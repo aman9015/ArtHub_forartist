@@ -37,6 +37,16 @@ type FeedArtwork = {
   avatarUrl: string | null;
   activityAt: string;
   repostedBy?: RepostedBy;
+
+  likeCount: number;
+  commentCount: number;
+  repostCount: number;
+  saveCount: number;
+
+  viewerLiked: boolean;
+  viewerSaved: boolean;
+  viewerReposted: boolean;
+  viewerFollowsArtist: boolean;
 };
 
 type FeedRow = {
@@ -60,10 +70,10 @@ type FeedRow = {
   artist_about: string | null;
   artist_avatar_url: string | null;
 
-  like_count: number;
-  comment_count: number;
-  repost_count: number;
-  save_count: number;
+  like_count: number | string | null;
+  comment_count: number | string | null;
+  repost_count: number | string | null;
+  save_count: number | string | null;
 
   viewer_liked: boolean;
   viewer_saved: boolean;
@@ -92,12 +102,20 @@ function getTrendingScore(value: number | string | null | undefined) {
   return Number.isFinite(score) ? score : null;
 }
 
+function getCount(value: number | string | null | undefined) {
+  const count = Number(value);
+
+  return Number.isFinite(count) ? count : 0;
+}
+
 export default function ExplorePage() {
   const supabase = useMemo(() => createClient(), []);
 
   const [activeFeed, setActiveFeed] = useState<FeedType>("following");
   const [discoverMode, setDiscoverMode] =
     useState<DiscoverMode>("recent");
+
+  const [viewerUserId, setViewerUserId] = useState<string | null>(null);
 
   const [feedArtworks, setFeedArtworks] = useState<FeedArtwork[]>([]);
   const [initialLoading, setInitialLoading] = useState(true);
@@ -117,6 +135,26 @@ export default function ExplorePage() {
     activeFeed === "following"
       ? "following"
       : `discover-${discoverMode}`;
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadViewer() {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (isMounted) {
+        setViewerUserId(user?.id || null);
+      }
+    }
+
+    void loadViewer();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [supabase]);
 
   const loadPage = useCallback(
     async ({
@@ -176,6 +214,13 @@ export default function ExplorePage() {
 
       if (error) {
         alert(error.message);
+
+        initialLoadingRef.current = false;
+        loadingMoreRef.current = false;
+
+        setInitialLoading(false);
+        setLoadingMore(false);
+
         return;
       }
 
@@ -196,6 +241,16 @@ export default function ExplorePage() {
           ownerId: item.artist_id,
           avatarUrl: item.artist_avatar_url || null,
           activityAt: item.event_created_at,
+
+          likeCount: getCount(item.like_count),
+          commentCount: getCount(item.comment_count),
+          repostCount: getCount(item.repost_count),
+          saveCount: getCount(item.save_count),
+
+          viewerLiked: Boolean(item.viewer_liked),
+          viewerSaved: Boolean(item.viewer_saved),
+          viewerReposted: Boolean(item.viewer_reposted),
+          viewerFollowsArtist: Boolean(item.viewer_follows_artist),
 
           repostedBy: isFollowingRepost
             ? {
@@ -224,7 +279,6 @@ export default function ExplorePage() {
 
       if (reset) {
         setFeedArtworks(formattedFeed);
-
         window.dispatchEvent(new Event("arthub:feed-refreshed"));
       } else {
         setFeedArtworks((previous) => {
@@ -249,13 +303,11 @@ export default function ExplorePage() {
         });
       }
 
-      if (requestVersion === requestVersionRef.current) {
-        initialLoadingRef.current = false;
-        loadingMoreRef.current = false;
+      initialLoadingRef.current = false;
+      loadingMoreRef.current = false;
 
-        setInitialLoading(false);
-        setLoadingMore(false);
-      }
+      setInitialLoading(false);
+      setLoadingMore(false);
     },
     [activeFeed, discoverMode, supabase]
   );
@@ -367,6 +419,7 @@ export default function ExplorePage() {
           onUploadClick={openGlobalUpload}
           artworks={feedArtworks}
           onDeleteArtwork={handleDeleteArtwork}
+          viewerUserId={viewerUserId}
           initialLoading={initialLoading}
           loadingMore={loadingMore}
           hasMore={hasMore}

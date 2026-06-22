@@ -12,9 +12,11 @@ import {
     Send,
     Check,
     Trash2,
+    Flag,
 } from "lucide-react";
 import { addNotification } from "@/app/lib/storage";
 import { createClient } from "@/app/lib/supabase";
+import ReportModal from "@/app/components/modals/ReportModal";
 
 type ArtworkDetailModalProps = {
     id: string | number;
@@ -53,6 +55,18 @@ type Profile = {
     name: string;
     username: string;
 };
+
+type ReportTarget =
+    | {
+          type: "artwork";
+          id: string | number;
+          label: string;
+      }
+    | {
+          type: "comment";
+          id: number;
+          label: string;
+      };
 
 function formatCommentTime(createdAt: string, now: number) {
     const createdTime = new Date(createdAt).getTime();
@@ -117,6 +131,7 @@ export default function ArtworkDetailModal({
     const [deletingCommentId, setDeletingCommentId] = useState<number | null>(
         null
     );
+    const [reportTarget, setReportTarget] = useState<ReportTarget | null>(null);
     const [now, setNow] = useState(() => Date.now());
 
     async function loadComments() {
@@ -322,8 +337,9 @@ export default function ArtworkDetailModal({
                         <button
                             type="button"
                             onClick={onLike}
-                            className={`flex flex-col items-center gap-2 rounded-2xl border border-zinc-800 py-4 transition hover:bg-zinc-900 ${liked ? "text-red-400" : ""
-                                }`}
+                            className={`flex flex-col items-center gap-2 rounded-2xl border border-zinc-800 py-4 transition hover:bg-zinc-900 ${
+                                liked ? "text-red-400" : ""
+                            }`}
                         >
                             <Heart size={22} fill={liked ? "currentColor" : "none"} />
                             <span className="text-sm">{likes}</span>
@@ -340,8 +356,9 @@ export default function ArtworkDetailModal({
                         <button
                             type="button"
                             onClick={onRepost}
-                            className={`flex flex-col items-center gap-2 rounded-2xl border border-zinc-800 py-4 transition hover:bg-zinc-900 hover:text-green-400 ${reposted ? "text-green-400" : ""
-                                }`}
+                            className={`flex flex-col items-center gap-2 rounded-2xl border border-zinc-800 py-4 transition hover:bg-zinc-900 hover:text-green-400 ${
+                                reposted ? "text-green-400" : ""
+                            }`}
                         >
                             <Repeat2 size={22} />
                             <span className="text-sm">{reposts}</span>
@@ -350,8 +367,9 @@ export default function ArtworkDetailModal({
                         <button
                             type="button"
                             onClick={onSave}
-                            className={`flex flex-col items-center gap-2 rounded-2xl border border-zinc-800 py-4 transition hover:bg-zinc-900 ${saved ? "text-yellow-400" : ""
-                                }`}
+                            className={`flex flex-col items-center gap-2 rounded-2xl border border-zinc-800 py-4 transition hover:bg-zinc-900 ${
+                                saved ? "text-yellow-400" : ""
+                            }`}
                         >
                             <Bookmark size={22} fill={saved ? "currentColor" : "none"} />
                             <span className="text-sm">{saved ? "Saved" : "Save"}</span>
@@ -365,6 +383,21 @@ export default function ArtworkDetailModal({
                     >
                         {shared ? <Check size={18} /> : <Share2 size={18} />}
                         {shared ? "Shared / Link Copied" : "Share Artwork"}
+                    </button>
+
+                    <button
+                        type="button"
+                        onClick={() =>
+                            setReportTarget({
+                                type: "artwork",
+                                id,
+                                label: title,
+                            })
+                        }
+                        className="mt-3 flex w-full items-center justify-center gap-2 rounded-full border border-zinc-800 py-3 text-sm font-semibold text-zinc-300 transition hover:border-red-900/60 hover:bg-red-950/20 hover:text-red-300"
+                    >
+                        <Flag size={17} />
+                        Report Artwork
                     </button>
 
                     <div className="mt-6 border-t border-zinc-800 pt-5">
@@ -408,22 +441,43 @@ export default function ArtworkDetailModal({
                                     >
                                         <div className="flex items-start justify-between gap-3">
                                             <div>
-                                                <p className="font-semibold">{comment.authorName}</p>
+                                                <p className="font-semibold">
+                                                    {comment.authorName}
+                                                </p>
+
                                                 <p className="mt-1 text-xs text-zinc-500">
                                                     {formatCommentTime(comment.created_at, now)}
                                                 </p>
                                             </div>
 
-                                            {isMyComment && (
+                                            {isMyComment ? (
                                                 <button
                                                     type="button"
-                                                    onClick={() => void handleDeleteComment(comment.id)}
+                                                    onClick={() =>
+                                                        void handleDeleteComment(comment.id)
+                                                    }
                                                     disabled={isDeleting}
                                                     title="Delete comment"
                                                     aria-label="Delete comment"
                                                     className="rounded-full p-2 text-zinc-500 transition hover:bg-red-500/10 hover:text-red-400 disabled:opacity-50"
                                                 >
                                                     <Trash2 size={17} />
+                                                </button>
+                                            ) : (
+                                                <button
+                                                    type="button"
+                                                    onClick={() =>
+                                                        setReportTarget({
+                                                            type: "comment",
+                                                            id: comment.id,
+                                                            label: `Comment by ${comment.authorName}`,
+                                                        })
+                                                    }
+                                                    title="Report comment"
+                                                    aria-label="Report comment"
+                                                    className="rounded-full p-2 text-zinc-500 transition hover:bg-red-500/10 hover:text-red-400"
+                                                >
+                                                    <Flag size={17} />
                                                 </button>
                                             )}
                                         </div>
@@ -442,6 +496,15 @@ export default function ArtworkDetailModal({
                     </div>
                 </div>
             </section>
+
+            {reportTarget && (
+                <ReportModal
+                    targetType={reportTarget.type}
+                    targetId={reportTarget.id}
+                    targetLabel={reportTarget.label}
+                    onClose={() => setReportTarget(null)}
+                />
+            )}
         </div>
     );
 }

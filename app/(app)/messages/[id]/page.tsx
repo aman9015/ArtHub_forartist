@@ -1,11 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import RequireAuth from "@/app/auth/RequireAuth";
 import { createClient } from "@/app/lib/supabase";
-import { ArrowLeft, Send } from "lucide-react";
+import { ArrowLeft, Ban, Send } from "lucide-react";
 
 type Message = {
     id: number;
@@ -37,7 +37,7 @@ type TypingPayload = {
 function ChatContent() {
     const params = useParams();
     const conversationId = params.id as string;
-    const supabase = createClient();
+    const supabase = useMemo(() => createClient(), []);
 
     const messagesEndRef = useRef<HTMLDivElement | null>(null);
     const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -49,6 +49,7 @@ function ChatContent() {
     const [text, setText] = useState("");
     const [loading, setLoading] = useState(true);
     const [otherUserTyping, setOtherUserTyping] = useState(false);
+    const [conversationBlocked, setConversationBlocked] = useState(false);
 
     function scrollToBottom() {
         setTimeout(() => {
@@ -86,18 +87,34 @@ function ChatContent() {
 
         const conversation = conversationData as Conversation;
 
+        const isConversationMember =
+            conversation.user_one === user.id || conversation.user_two === user.id;
+
+        if (!isConversationMember) {
+            setLoading(false);
+            return;
+        }
+
         const otherUserId =
             conversation.user_one === user.id
                 ? conversation.user_two
                 : conversation.user_one;
 
-        const { data: profileData } = await supabase
-            .from("profiles")
-            .select("id, name, username, avatar_url")
-            .eq("id", otherUserId)
-            .single();
+        const [profileResult, blockedResult] = await Promise.all([
+            supabase
+                .from("profiles")
+                .select("id, name, username, avatar_url")
+                .eq("id", otherUserId)
+                .single(),
 
-        setOtherUser((profileData as Profile) || null);
+            supabase.rpc("are_users_blocked", {
+                p_first_user_id: user.id,
+                p_second_user_id: otherUserId,
+            }),
+        ]);
+
+        setOtherUser((profileResult.data as Profile) || null);
+        setConversationBlocked(Boolean(blockedResult.data));
 
         await supabase
             .from("messages")
@@ -116,7 +133,7 @@ function ChatContent() {
     }
 
     useEffect(() => {
-        loadChat();
+        void loadChat();
 
         const channel = supabase
             .channel(`chat-${conversationId}`)
@@ -129,6 +146,7 @@ function ChatContent() {
                     const typingPayload = payload as TypingPayload;
 
                     if (typingPayload.user_id === myId) return;
+                    if (conversationBlocked) return;
 
                     setOtherUserTyping(typingPayload.is_typing);
 
@@ -151,14 +169,14 @@ function ChatContent() {
 
                     if (newMessage.conversation_id !== conversationId) return;
 
-                    setMessages((prev) => {
-                        const alreadyExists = prev.some(
+                    setMessages((previous) => {
+                        const alreadyExists = previous.some(
                             (message) => message.id === newMessage.id
                         );
 
-                        if (alreadyExists) return prev;
+                        if (alreadyExists) return previous;
 
-                        return [...prev, newMessage];
+                        return [...previous, newMessage];
                     });
 
                     const {
@@ -184,14 +202,14 @@ function ChatContent() {
                 clearTimeout(typingTimeoutRef.current);
             }
         };
-    }, [conversationId, myId]);
+    }, [conversationId, myId, conversationBlocked, supabase]);
 
     useEffect(() => {
         scrollToBottom();
     }, [messages, otherUserTyping]);
 
     async function sendTypingStatus(isTyping: boolean) {
-        if (!myId || !channelRef.current) return;
+        if (!myId || !channelRef.current || conversationBlocked) return;
 
         await channelRef.current.send({
             type: "broadcast",
@@ -204,25 +222,34 @@ function ChatContent() {
     }
 
     function handleTextChange(value: string) {
+        if (conversationBlocked) return;
+
         setText(value);
 
-        sendTypingStatus(true);
+        void sendTypingStatus(true);
 
         if (typingTimeoutRef.current) {
             clearTimeout(typingTimeoutRef.current);
         }
 
         typingTimeoutRef.current = setTimeout(() => {
-            sendTypingStatus(false);
+            void sendTypingStatus(false);
         }, 1200);
     }
 
     async function sendMessage() {
+        if (conversationBlocked) {
+            alert(
+                "Messaging is unavailable because one of you has blocked the other."
+            );
+            return;
+        }
+
         if (!text.trim() || !myId) return;
 
         const message = text.trim();
         setText("");
-        sendTypingStatus(false);
+        void sendTypingStatus(false);
 
         const { error } = await supabase.from("messages").insert({
             conversation_id: conversationId,
@@ -274,9 +301,18 @@ function ChatContent() {
 
                         <div>
                             <p className="font-bold">{otherUser?.name || "User"}</p>
-                            <p className="text-sm text-zinc-400">@{otherUser?.username}</p>
+                            <p className="text-sm text-zinc-400">
+                                @{otherUser?.username}
+                            </p>
                         </div>
                     </div>
+
+                    {conversationBlocked && (
+                        <div className="hidden items-center gap-2 rounded-full border border-red-900/60 bg-red-950/30 px-3 py-2 text-xs font-semibold text-red-300 sm:flex">
+                            <Ban size={14} />
+                            Messaging unavailable
+                        </div>
+                    )}
                 </div>
 
                 <div className="flex-1 space-y-3 overflow-y-auto p-5">
@@ -287,19 +323,29 @@ function ChatContent() {
                             return (
                                 <div
                                     key={message.id}
-                                    className={`flex ${mine ? "justify-end" : "justify-start"}`}
+                                    className={`flex ${
+                                        mine ? "justify-end" : "justify-start"
+                                    }`}
                                 >
                                     <div
-                                        className={`max-w-[75%] rounded-3xl px-5 py-3 ${mine ? "bg-white text-black" : "bg-zinc-900 text-white"
-                                            }`}
+                                        className={`max-w-[75%] rounded-3xl px-5 py-3 ${
+                                            mine
+                                                ? "bg-white text-black"
+                                                : "bg-zinc-900 text-white"
+                                        }`}
                                     >
                                         <p>{message.content}</p>
 
                                         <p
-                                            className={`mt-1 text-xs ${mine ? "text-zinc-600" : "text-zinc-500"
-                                                }`}
+                                            className={`mt-1 text-xs ${
+                                                mine
+                                                    ? "text-zinc-600"
+                                                    : "text-zinc-500"
+                                            }`}
                                         >
-                                            {new Date(message.created_at).toLocaleTimeString([], {
+                                            {new Date(
+                                                message.created_at
+                                            ).toLocaleTimeString([], {
                                                 hour: "2-digit",
                                                 minute: "2-digit",
                                             })}
@@ -314,7 +360,7 @@ function ChatContent() {
                         </div>
                     )}
 
-                    {otherUserTyping && (
+                    {otherUserTyping && !conversationBlocked && (
                         <div className="flex justify-start">
                             <div className="rounded-3xl bg-zinc-900 px-5 py-3 text-sm text-zinc-400">
                                 {otherUser?.name || "User"} is typing...
@@ -325,25 +371,35 @@ function ChatContent() {
                     <div ref={messagesEndRef} />
                 </div>
 
-                <div className="flex gap-3 border-t border-zinc-800 p-5">
-                    <input
-                        value={text}
-                        onChange={(e) => handleTextChange(e.target.value)}
-                        onKeyDown={(e) => {
-                            if (e.key === "Enter") sendMessage();
-                        }}
-                        placeholder="Write a message..."
-                        className="min-w-0 flex-1 rounded-full border border-zinc-800 bg-zinc-900 px-5 py-3 outline-none"
-                    />
+                {conversationBlocked ? (
+                    <div className="flex items-center gap-3 border-t border-zinc-800 bg-red-950/20 p-5 text-sm text-red-200">
+                        <Ban size={19} className="shrink-0 text-red-400" />
+                        Messaging is unavailable because one of you has blocked the
+                        other.
+                    </div>
+                ) : (
+                    <div className="flex gap-3 border-t border-zinc-800 p-5">
+                        <input
+                            value={text}
+                            onChange={(event) => handleTextChange(event.target.value)}
+                            onKeyDown={(event) => {
+                                if (event.key === "Enter") {
+                                    void sendMessage();
+                                }
+                            }}
+                            placeholder="Write a message..."
+                            className="min-w-0 flex-1 rounded-full border border-zinc-800 bg-zinc-900 px-5 py-3 outline-none"
+                        />
 
-                    <button
-                        type="button"
-                        onClick={sendMessage}
-                        className="flex h-12 w-12 items-center justify-center rounded-full bg-white text-black hover:bg-zinc-200"
-                    >
-                        <Send size={18} />
-                    </button>
-                </div>
+                        <button
+                            type="button"
+                            onClick={() => void sendMessage()}
+                            className="flex h-12 w-12 items-center justify-center rounded-full bg-white text-black hover:bg-zinc-200"
+                        >
+                            <Send size={18} />
+                        </button>
+                    </div>
+                )}
             </section>
         </main>
     );

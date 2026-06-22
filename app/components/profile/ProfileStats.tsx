@@ -17,12 +17,7 @@ type Profile = {
   username: string;
 };
 
-export default function ProfileStats({
-  username,
-  artworks,
-  saved,
-  liked,
-}: Props) {
+export default function ProfileStats({ username }: Props) {
   const supabase = createClient();
   const router = useRouter();
 
@@ -95,7 +90,7 @@ export default function ProfileStats({
   }
 
   useEffect(() => {
-    loadFollowState();
+    void loadFollowState();
   }, [username]);
 
   async function handleFollow() {
@@ -179,21 +174,6 @@ export default function ProfileStats({
   return (
     <div className="mt-8 flex flex-wrap items-center justify-between gap-6 border-b border-zinc-800 pb-6">
       <div className="flex flex-wrap gap-8">
-        <div>
-          <p className="text-2xl font-bold">{artworks}</p>
-          <p className="text-zinc-400">Posts</p>
-        </div>
-
-        <div>
-          <p className="text-2xl font-bold">{saved}</p>
-          <p className="text-zinc-400">Saved</p>
-        </div>
-
-        <div>
-          <p className="text-2xl font-bold">{liked}</p>
-          <p className="text-zinc-400">Liked</p>
-        </div>
-
         <div>
           <p className="text-2xl font-bold">{followers}</p>
           <p className="text-zinc-400">Followers</p>

@@ -1,24 +1,45 @@
-import Image from "next/image";
+"use client";
+
+import ArtworkCard from "@/app/components/ArtworkCard";
 
 type Artwork = {
     id: string;
     title: string;
+    artist: string;
+    username: string;
     image: string;
+    ownerId: string;
+    avatarUrl: string | null;
+
+    initialLikes: number;
+    initialComments: number;
+    initialReposts: number;
+    initialSaves: number;
+
+    initialLiked: boolean;
+    initialSaved: boolean;
+    initialReposted: boolean;
+    initialFollowing: boolean;
 };
 
 type Props = {
     artworks: Artwork[];
     emptyMessage: string;
+    viewerUserId: string | null;
+    onDelete: (id: string) => void;
 };
 
 export default function ProfileGallery({
     artworks,
     emptyMessage,
+    viewerUserId,
+    onDelete,
 }: Props) {
     if (artworks.length === 0) {
         return (
             <div className="mt-10 rounded-3xl border border-zinc-800 bg-zinc-950 p-12 text-center">
                 <h2 className="text-xl font-bold">{emptyMessage}</h2>
+
                 <p className="mt-2 text-zinc-500">
                     Your artworks will appear here.
                 </p>
@@ -29,25 +50,27 @@ export default function ProfileGallery({
     return (
         <div className="mt-10 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
             {artworks.map((artwork) => (
-                <div
+                <ArtworkCard
                     key={artwork.id}
-                    className="overflow-hidden rounded-3xl border border-zinc-800 bg-zinc-950"
-                >
-                    <div className="relative h-[350px]">
-                        <Image
-                            src={artwork.image}
-                            alt={artwork.title}
-                            fill
-                            unoptimized
-                            sizes="(max-width:768px) 100vw, 33vw"
-                            className="object-cover"
-                        />
-                    </div>
-
-                    <div className="p-4">
-                        <h2 className="font-bold">{artwork.title}</h2>
-                    </div>
-                </div>
+                    variant="profile"
+                    id={artwork.id}
+                    image={artwork.image}
+                    title={artwork.title}
+                    artist={artwork.artist}
+                    username={artwork.username}
+                    ownerId={artwork.ownerId}
+                    avatarUrl={artwork.avatarUrl}
+                    viewerUserId={viewerUserId}
+                    initialLikes={artwork.initialLikes}
+                    initialComments={artwork.initialComments}
+                    initialReposts={artwork.initialReposts}
+                    initialSaves={artwork.initialSaves}
+                    initialLiked={artwork.initialLiked}
+                    initialSaved={artwork.initialSaved}
+                    initialReposted={artwork.initialReposted}
+                    initialFollowing={artwork.initialFollowing}
+                    onDelete={onDelete}
+                />
             ))}
         </div>
     );
