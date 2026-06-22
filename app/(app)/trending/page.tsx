@@ -27,7 +27,7 @@ type LikeWithArtwork = {
   artwork_id: string;
   artworks: {
     user_id: string;
-  } | null;
+  }[];
 };
 
 type TrendingArtist = Profile & {
@@ -79,7 +79,7 @@ function TrendingContent() {
           ).length;
 
           const totalLikes = likes.filter(
-            (like) => like.artworks?.user_id === profile.id
+            (like) => like.artworks?.[0]?.user_id === profile.id
           ).length;
 
           const score = followerCount * 5 + artworkCount * 2 + totalLikes;
