@@ -94,6 +94,9 @@ export default function ArtworkCard({
     const [repostLoading, setRepostLoading] = useState(false);
 
     const isOwner = viewerUserId === ownerId;
+    const isCreator = username.trim().toLowerCase() === "the_creator";
+    const isRepostedByCreator =
+        repostedBy?.username.trim().toLowerCase() === "the_creator";
 
     useEffect(() => {
         setLiked(initialLiked);
@@ -443,9 +446,8 @@ export default function ArtworkCard({
                                 <button
                                     type="button"
                                     onClick={() => void handleLike()}
-                                    className={`flex items-center gap-1.5 transition hover:text-red-400 ${
-                                        liked ? "text-red-400" : ""
-                                    }`}
+                                    className={`flex items-center gap-1.5 transition hover:text-red-400 ${liked ? "text-red-400" : ""
+                                        }`}
                                     title="Like"
                                 >
                                     <Heart
@@ -469,9 +471,8 @@ export default function ArtworkCard({
                                     type="button"
                                     onClick={() => void handleRepost()}
                                     disabled={repostLoading}
-                                    className={`flex items-center gap-1.5 transition hover:text-green-400 disabled:opacity-50 ${
-                                        reposted ? "text-green-400" : ""
-                                    }`}
+                                    className={`flex items-center gap-1.5 transition hover:text-green-400 disabled:opacity-50 ${reposted ? "text-green-400" : ""
+                                        }`}
                                     title="Repost"
                                 >
                                     <Repeat2 size={18} />
@@ -482,9 +483,8 @@ export default function ArtworkCard({
                             <button
                                 type="button"
                                 onClick={() => void handleSave()}
-                                className={`shrink-0 transition hover:text-yellow-400 ${
-                                    saved ? "text-yellow-400" : "text-zinc-100"
-                                }`}
+                                className={`shrink-0 transition hover:text-yellow-400 ${saved ? "text-yellow-400" : "text-zinc-100"
+                                    }`}
                                 title={saved ? "Unsave artwork" : "Save artwork"}
                             >
                                 <Bookmark
@@ -509,17 +509,33 @@ export default function ArtworkCard({
                         href={`/profile/${repostedBy.username}`}
                         className="flex items-center gap-2 px-2 text-sm font-semibold text-zinc-400 transition hover:text-zinc-200"
                     >
-                        {repostedBy.avatarUrl ? (
-                            <img
-                                src={repostedBy.avatarUrl}
-                                alt={repostedBy.name}
-                                className="h-6 w-6 rounded-full border border-zinc-700 object-cover"
-                            />
-                        ) : (
-                            <div className="flex h-6 w-6 items-center justify-center rounded-full bg-zinc-800 text-[10px] font-bold text-zinc-200">
-                                {repostedBy.name.charAt(0).toUpperCase()}
-                            </div>
-                        )}
+                        <div
+                            className={
+                                isRepostedByCreator
+                                    ? "rounded-full bg-gradient-to-br from-yellow-100 via-amber-400 to-yellow-700 p-[2px] shadow-[0_0_12px_rgba(245,158,11,0.55)]"
+                                    : ""
+                            }
+                        >
+                            {repostedBy.avatarUrl ? (
+                                <img
+                                    src={repostedBy.avatarUrl}
+                                    alt={repostedBy.name}
+                                    className={`h-6 w-6 rounded-full object-cover ${isRepostedByCreator
+                                            ? "border border-zinc-950"
+                                            : "border border-zinc-700"
+                                        }`}
+                                />
+                            ) : (
+                                <div
+                                    className={`flex h-6 w-6 items-center justify-center rounded-full bg-zinc-800 text-[10px] font-bold text-zinc-200 ${isRepostedByCreator
+                                            ? "border border-zinc-950"
+                                            : ""
+                                        }`}
+                                >
+                                    {repostedBy.name.charAt(0).toUpperCase()}
+                                </div>
+                            )}
+                        </div>
 
                         <Repeat2 size={16} className="text-green-400" />
 
@@ -538,17 +554,33 @@ export default function ArtworkCard({
                             href={`/profile/${username}`}
                             className="flex items-center gap-3"
                         >
-                            {avatarUrl ? (
-                                <img
-                                    src={avatarUrl}
-                                    alt={artist}
-                                    className="h-11 w-11 rounded-full border border-zinc-700 object-cover"
-                                />
-                            ) : (
-                                <div className="flex h-11 w-11 items-center justify-center rounded-full bg-zinc-800 font-bold">
-                                    {artist.charAt(0)}
-                                </div>
-                            )}
+                            <div
+                                className={
+                                    isCreator
+                                        ? "rounded-full bg-gradient-to-br from-yellow-100 via-amber-400 to-yellow-700 p-[3px] shadow-[0_0_18px_rgba(245,158,11,0.6)]"
+                                        : ""
+                                }
+                            >
+                                {avatarUrl ? (
+                                    <img
+                                        src={avatarUrl}
+                                        alt={artist}
+                                        className={`h-11 w-11 rounded-full object-cover ${isCreator
+                                                ? "border-2 border-zinc-950"
+                                                : "border border-zinc-700"
+                                            }`}
+                                    />
+                                ) : (
+                                    <div
+                                        className={`flex h-11 w-11 items-center justify-center rounded-full bg-zinc-800 font-bold ${isCreator
+                                                ? "border-2 border-zinc-950"
+                                                : ""
+                                            }`}
+                                    >
+                                        {artist.charAt(0)}
+                                    </div>
+                                )}
+                            </div>
 
                             <div>
                                 <h2 className="text-lg font-bold">{artist}</h2>
@@ -561,11 +593,10 @@ export default function ArtworkCard({
                                 <button
                                     type="button"
                                     onClick={() => void handleFollow()}
-                                    className={`rounded-full px-4 py-2 text-sm ${
-                                        following
+                                    className={`rounded-full px-4 py-2 text-sm ${following
                                             ? "border border-zinc-700 bg-zinc-900 text-white"
                                             : "border border-zinc-700 hover:bg-zinc-800"
-                                    }`}
+                                        }`}
                                 >
                                     {following ? "Following" : "Follow"}
                                 </button>
@@ -657,9 +688,8 @@ export default function ArtworkCard({
                                 <button
                                     type="button"
                                     onClick={() => void handleLike()}
-                                    className={`flex items-center gap-2 hover:text-red-400 ${
-                                        liked ? "text-red-400" : ""
-                                    }`}
+                                    className={`flex items-center gap-2 hover:text-red-400 ${liked ? "text-red-400" : ""
+                                        }`}
                                 >
                                     <Heart
                                         size={21}
@@ -681,9 +711,8 @@ export default function ArtworkCard({
                                     type="button"
                                     onClick={() => void handleRepost()}
                                     disabled={repostLoading}
-                                    className={`flex items-center gap-2 transition hover:text-green-400 disabled:opacity-50 ${
-                                        reposted ? "text-green-400" : ""
-                                    }`}
+                                    className={`flex items-center gap-2 transition hover:text-green-400 disabled:opacity-50 ${reposted ? "text-green-400" : ""
+                                        }`}
                                 >
                                     <Repeat2 size={21} />
                                     <span>{repostCount}</span>
@@ -693,9 +722,8 @@ export default function ArtworkCard({
                             <button
                                 type="button"
                                 onClick={() => void handleSave()}
-                                className={`flex items-center gap-1 hover:text-yellow-400 ${
-                                    saved ? "text-yellow-400" : ""
-                                }`}
+                                className={`flex items-center gap-1 hover:text-yellow-400 ${saved ? "text-yellow-400" : ""
+                                    }`}
                             >
                                 <Bookmark
                                     size={21}

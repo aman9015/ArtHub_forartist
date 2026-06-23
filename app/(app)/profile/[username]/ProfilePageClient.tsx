@@ -216,10 +216,6 @@ function ProfileContent({ username }: Props) {
             const relatedArtworks = (relatedArtworksData ||
                 []) as SupabaseArtwork[];
 
-            const artworkById = new Map(
-                relatedArtworks.map((artwork) => [artwork.id, artwork])
-            );
-
             const artworkOwnerIds = uniqueIds(
                 relatedArtworks.map((artwork) => artwork.user_id)
             );
@@ -262,47 +258,47 @@ function ProfileContent({ username }: Props) {
 
                 user
                     ? supabase
-                          .from("likes")
-                          .select("artwork_id")
-                          .eq("user_id", user.id)
-                          .in("artwork_id", allRelevantArtworkIds)
+                        .from("likes")
+                        .select("artwork_id")
+                        .eq("user_id", user.id)
+                        .in("artwork_id", allRelevantArtworkIds)
                     : Promise.resolve({
-                          data: [] as ArtworkReference[],
-                          error: null,
-                      }),
+                        data: [] as ArtworkReference[],
+                        error: null,
+                    }),
 
                 user
                     ? supabase
-                          .from("saves")
-                          .select("artwork_id")
-                          .eq("user_id", user.id)
-                          .in("artwork_id", allRelevantArtworkIds)
+                        .from("saves")
+                        .select("artwork_id")
+                        .eq("user_id", user.id)
+                        .in("artwork_id", allRelevantArtworkIds)
                     : Promise.resolve({
-                          data: [] as ArtworkReference[],
-                          error: null,
-                      }),
+                        data: [] as ArtworkReference[],
+                        error: null,
+                    }),
 
                 user
                     ? supabase
-                          .from("reposts")
-                          .select("artwork_id")
-                          .eq("user_id", user.id)
-                          .in("artwork_id", allRelevantArtworkIds)
+                        .from("reposts")
+                        .select("artwork_id")
+                        .eq("user_id", user.id)
+                        .in("artwork_id", allRelevantArtworkIds)
                     : Promise.resolve({
-                          data: [] as ArtworkReference[],
-                          error: null,
-                      }),
+                        data: [] as ArtworkReference[],
+                        error: null,
+                    }),
 
                 user && artworkOwnerIds.length > 0
                     ? supabase
-                          .from("follows")
-                          .select("following_id")
-                          .eq("follower_id", user.id)
-                          .in("following_id", artworkOwnerIds)
+                        .from("follows")
+                        .select("following_id")
+                        .eq("follower_id", user.id)
+                        .in("following_id", artworkOwnerIds)
                     : Promise.resolve({
-                          data: [] as FollowReference[],
-                          error: null,
-                      }),
+                        data: [] as FollowReference[],
+                        error: null,
+                    }),
             ]);
 
             if (cancelled) return;
@@ -486,6 +482,9 @@ function ProfileContent({ username }: Props) {
         emptyMessage = "No liked artworks yet";
     }
 
+    const isCreator =
+        profile.username.trim().toLowerCase() === "the_creator";
+
     return (
         <main className="min-h-screen bg-black text-white">
             <ProfileHeader
@@ -495,6 +494,7 @@ function ProfileContent({ username }: Props) {
                 avatar={profile.avatar_url}
                 isOwnProfile={isOwnProfile}
                 commissionsOpen={profile.commissions_open}
+                isCreator={isCreator}
             />
 
             <div className="mx-auto max-w-6xl px-6 pb-16">

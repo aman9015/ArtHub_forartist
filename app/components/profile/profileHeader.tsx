@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { Inbox, Sparkles } from "lucide-react";
+import { Crown, Inbox, Sparkles } from "lucide-react";
 import EditProfileModal from "./EditProfileModal";
 
 type Props = {
@@ -12,6 +12,7 @@ type Props = {
     avatar?: string | null;
     isOwnProfile: boolean;
     commissionsOpen: boolean;
+    isCreator: boolean;
 };
 
 export default function ProfileHeader({
@@ -21,6 +22,7 @@ export default function ProfileHeader({
     avatar,
     isOwnProfile,
     commissionsOpen,
+    isCreator,
 }: Props) {
     const [showEdit, setShowEdit] = useState(false);
 
@@ -31,18 +33,25 @@ export default function ProfileHeader({
             <div className="mx-auto max-w-6xl px-6">
                 <div className="flex flex-col items-center md:flex-row md:items-end md:justify-between">
                     <div className="flex flex-col items-center md:flex-row md:gap-6">
-                        <div className="relative -mt-16 flex h-32 w-32 overflow-hidden rounded-full border-4 border-black bg-zinc-800 text-4xl font-bold shadow-xl">
-                            {avatar ? (
-                                <img
-                                    src={avatar}
-                                    alt={artist}
-                                    className="h-full w-full object-cover"
-                                />
-                            ) : (
-                                <div className="flex h-full w-full items-center justify-center">
-                                    {artist.charAt(0)}
-                                </div>
-                            )}
+                        <div
+                            className={`relative -mt-16 rounded-full p-[4px] ${isCreator
+                                    ? "bg-gradient-to-br from-yellow-100 via-amber-400 to-yellow-700 shadow-[0_0_30px_rgba(245,158,11,0.65)]"
+                                    : "bg-black"
+                                }`}
+                        >
+                            <div className="flex h-32 w-32 overflow-hidden rounded-full bg-zinc-800 text-4xl font-bold shadow-xl">
+                                {avatar ? (
+                                    <img
+                                        src={avatar}
+                                        alt={artist}
+                                        className="h-full w-full object-cover"
+                                    />
+                                ) : (
+                                    <div className="flex h-full w-full items-center justify-center">
+                                        {artist.charAt(0)}
+                                    </div>
+                                )}
+                            </div>
                         </div>
 
                         <div className="mt-4 text-center md:text-left">
@@ -56,6 +65,13 @@ export default function ProfileHeader({
                                     </span>
                                 )}
                             </div>
+
+                            {isCreator && (
+                                <span className="mt-3 inline-flex items-center gap-2 rounded-full border border-amber-300/50 bg-amber-400/10 px-4 py-1.5 text-xs font-black tracking-[0.18em] text-amber-300 shadow-[0_0_18px_rgba(245,158,11,0.28)]">
+                                    <Crown size={15} />
+                                    THE CREATOR
+                                </span>
+                            )}
 
                             <p className="mt-2 text-zinc-400">@{username}</p>
                             <p className="mt-3 text-zinc-300">{bio}</p>
