@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
-import { usePathname } from "next/navigation";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { usePathname, useRouter } from "next/navigation";
 import {
   BarChart3,
   Bell,
@@ -22,12 +22,21 @@ type MobileNavProps = {
   onExploreClick?: () => void;
 };
 
+const ROUTES_TO_WARM = [
+  "/explore",
+  "/trending",
+  "/dashboard",
+  "/notifications",
+  "/messages",
+];
+
 export default function MobileNav({
   onUploadClick,
   hasNewFeed = false,
   onExploreClick,
 }: MobileNavProps) {
   const pathname = usePathname();
+  const router = useRouter();
   const supabase = useMemo(() => createClient(), []);
 
   const [isMoreOpen, setIsMoreOpen] = useState(false);
@@ -37,40 +46,61 @@ export default function MobileNav({
   const [notificationCount, setNotificationCount] = useState(0);
   const [unreadMessageCount, setUnreadMessageCount] = useState(0);
 
+  const prefetchRoute = useCallback(
+    (href: string) => {
+      router.prefetch(href);
+    },
+    [router]
+  );
+
   useEffect(() => {
+    let cancelled = false;
+
     async function loadMobileNavData() {
       const {
         data: { user },
       } = await supabase.auth.getUser();
 
-      if (!user) return;
+      if (!user || cancelled) return;
 
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("name, username, avatar_url")
-        .eq("id", user.id)
-        .single();
+      const [profileResult, notificationsResult, conversationsResult] =
+        await Promise.all([
+          supabase
+            .from("profiles")
+            .select("name, username, avatar_url")
+            .eq("id", user.id)
+            .single(),
 
-      if (profile) {
+          supabase
+            .from("notifications")
+            .select("id", { count: "exact", head: true })
+            .eq("user_id", user.id)
+            .eq("is_read", false),
+
+          supabase
+            .from("conversations")
+            .select("id")
+            .or(`user_one.eq.${user.id},user_two.eq.${user.id}`),
+        ]);
+
+      if (cancelled) return;
+
+      const profile = profileResult.data;
+
+      if (profile?.username?.trim()) {
         setProfileUrl(`/profile/${profile.username}`);
         setInitial(profile.name?.charAt(0).toUpperCase() || "A");
         setAvatarUrl(profile.avatar_url || null);
+      } else {
+        setProfileUrl("/create-profile");
+        setInitial(profile?.name?.charAt(0).toUpperCase() || "A");
+        setAvatarUrl(profile?.avatar_url || null);
       }
 
-      const { count: notifications } = await supabase
-        .from("notifications")
-        .select("*", { count: "exact", head: true })
-        .eq("user_id", user.id)
-        .eq("is_read", false);
+      setNotificationCount(notificationsResult.count || 0);
 
-      setNotificationCount(notifications || 0);
-
-      const { data: conversations } = await supabase
-        .from("conversations")
-        .select("id")
-        .or(`user_one.eq.${user.id},user_two.eq.${user.id}`);
-
-      const conversationIds = conversations?.map((item) => item.id) || [];
+      const conversationIds =
+        conversationsResult.data?.map((conversation) => conversation.id) || [];
 
       if (conversationIds.length === 0) {
         setUnreadMessageCount(0);
@@ -79,20 +109,40 @@ export default function MobileNav({
 
       const { count: unreadMessages } = await supabase
         .from("messages")
-        .select("*", { count: "exact", head: true })
+        .select("id", { count: "exact", head: true })
         .in("conversation_id", conversationIds)
         .neq("sender_id", user.id)
         .eq("is_read", false);
 
-      setUnreadMessageCount(unreadMessages || 0);
+      if (!cancelled) {
+        setUnreadMessageCount(unreadMessages || 0);
+      }
     }
 
     void loadMobileNavData();
+
+    return () => {
+      cancelled = true;
+    };
   }, [supabase]);
 
   useEffect(() => {
     setIsMoreOpen(false);
   }, [pathname]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      ROUTES_TO_WARM.forEach(prefetchRoute);
+
+      if (profileUrl !== "/create-profile") {
+        prefetchRoute(profileUrl);
+      }
+    }, 800);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [prefetchRoute, profileUrl]);
 
   async function handleLogout() {
     const { error } = await supabase.auth.signOut();
@@ -102,15 +152,14 @@ export default function MobileNav({
       return;
     }
 
-    window.location.href = "/login";
+    router.replace("/login");
   }
 
   function itemClass(active: boolean) {
-    return `relative flex min-w-0 flex-col items-center justify-center gap-1 rounded-2xl py-1 text-[10px] font-medium transition ${
-      active
-        ? "bg-zinc-800 text-white"
-        : "text-zinc-400 hover:bg-zinc-900 hover:text-white"
-    }`;
+    return `relative flex min-w-0 flex-col items-center justify-center gap-1 rounded-2xl py-1 text-[10px] font-medium transition ${active
+      ? "bg-zinc-800 text-white"
+      : "text-zinc-400 hover:bg-zinc-900 hover:text-white"
+      }`;
   }
 
   const exploreActive = pathname === "/explore";
@@ -135,12 +184,15 @@ export default function MobileNav({
           <section className="fixed bottom-24 left-4 right-4 z-[85] mx-auto max-w-md rounded-3xl border border-zinc-800 bg-zinc-950 p-3 shadow-2xl">
             <Link
               href="/dashboard"
+              prefetch
+              onMouseEnter={() => prefetchRoute("/dashboard")}
+              onFocus={() => prefetchRoute("/dashboard")}
+              onTouchStart={() => prefetchRoute("/dashboard")}
               onClick={() => setIsMoreOpen(false)}
-              className={`flex items-center gap-3 rounded-2xl px-4 py-3 transition ${
-                pathname.startsWith("/dashboard")
-                  ? "bg-zinc-800 text-white"
-                  : "text-zinc-300 hover:bg-zinc-900 hover:text-white"
-              }`}
+              className={`flex items-center gap-3 rounded-2xl px-4 py-3 transition ${pathname.startsWith("/dashboard")
+                ? "bg-zinc-800 text-white"
+                : "text-zinc-300 hover:bg-zinc-900 hover:text-white"
+                }`}
             >
               <BarChart3 size={21} />
               <span className="font-semibold">Dashboard</span>
@@ -148,12 +200,15 @@ export default function MobileNav({
 
             <Link
               href={profileUrl}
+              prefetch
+              onMouseEnter={() => prefetchRoute(profileUrl)}
+              onFocus={() => prefetchRoute(profileUrl)}
+              onTouchStart={() => prefetchRoute(profileUrl)}
               onClick={() => setIsMoreOpen(false)}
-              className={`mt-1 flex items-center gap-3 rounded-2xl px-4 py-3 transition ${
-                pathname.startsWith("/profile")
-                  ? "bg-zinc-800 text-white"
-                  : "text-zinc-300 hover:bg-zinc-900 hover:text-white"
-              }`}
+              className={`mt-1 flex items-center gap-3 rounded-2xl px-4 py-3 transition ${pathname.startsWith("/profile")
+                ? "bg-zinc-800 text-white"
+                : "text-zinc-300 hover:bg-zinc-900 hover:text-white"
+                }`}
             >
               <span className="flex h-8 w-8 items-center justify-center overflow-hidden rounded-full bg-gradient-to-br from-purple-500 to-pink-500 text-sm font-bold text-white">
                 {avatarUrl ? (
@@ -185,6 +240,10 @@ export default function MobileNav({
       <nav className="fixed bottom-3 left-1/2 z-[90] grid w-[calc(100%-1.5rem)] max-w-md -translate-x-1/2 grid-cols-6 gap-1 rounded-3xl border border-zinc-800 bg-zinc-950/95 px-2 py-2 shadow-2xl backdrop-blur">
         <Link
           href="/explore"
+          prefetch
+          onMouseEnter={() => prefetchRoute("/explore")}
+          onFocus={() => prefetchRoute("/explore")}
+          onTouchStart={() => prefetchRoute("/explore")}
           aria-label="Explore"
           onClick={(event) => {
             if (!onExploreClick) return;
@@ -205,6 +264,10 @@ export default function MobileNav({
 
         <Link
           href="/trending"
+          prefetch
+          onMouseEnter={() => prefetchRoute("/trending")}
+          onFocus={() => prefetchRoute("/trending")}
+          onTouchStart={() => prefetchRoute("/trending")}
           aria-label="Trending"
           className={itemClass(trendingActive)}
         >
@@ -227,6 +290,10 @@ export default function MobileNav({
 
         <Link
           href="/notifications"
+          prefetch
+          onMouseEnter={() => prefetchRoute("/notifications")}
+          onFocus={() => prefetchRoute("/notifications")}
+          onTouchStart={() => prefetchRoute("/notifications")}
           aria-label="Notifications"
           className={itemClass(notificationsActive)}
         >
@@ -243,6 +310,10 @@ export default function MobileNav({
 
         <Link
           href="/messages"
+          prefetch
+          onMouseEnter={() => prefetchRoute("/messages")}
+          onFocus={() => prefetchRoute("/messages")}
+          onTouchStart={() => prefetchRoute("/messages")}
           aria-label="Messages"
           className={itemClass(messagesActive)}
         >

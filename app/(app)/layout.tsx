@@ -17,6 +17,8 @@ import UploadModal from "@/app/components/layout/UploadModel";
 import { addNotification } from "@/app/lib/storage";
 import { createClient } from "@/app/lib/supabase";
 
+const FEED_UPDATE_CHECK_INTERVAL_MS = 45_000;
+
 type AppLayoutProps = {
     children: ReactNode;
 };
@@ -36,51 +38,74 @@ export default function ProtectedAppLayout({
     const [isUploadOpen, setIsUploadOpen] = useState(false);
     const [hasNewFeed, setHasNewFeed] = useState(false);
 
-    const lastSeenFeedVersion = useRef<string | null>(null);
+    const lastSeenFeedVersionRef = useRef<string | null>(null);
+    const feedVersionPromiseRef = useRef<Promise<string | null> | null>(
+        null
+    );
 
-    const fetchFeedVersion = useCallback(async () => {
-        const [
-            { data: artworksData, error: artworksError },
-            { data: repostsData, error: repostsError },
-        ] = await Promise.all([
-            supabase
-                .from("artworks")
-                .select("id, created_at")
-                .order("created_at", { ascending: false })
-                .limit(1),
-
-            supabase
-                .from("reposts")
-                .select("id, created_at")
-                .order("created_at", { ascending: false })
-                .limit(1),
-        ]);
-
-        if (artworksError || repostsError) {
-            console.log(
-                artworksError?.message ||
-                repostsError?.message ||
-                "Could not check feed updates."
-            );
-
-            return null;
+    const fetchFeedVersion = useCallback((): Promise<string | null> => {
+        if (feedVersionPromiseRef.current) {
+            return feedVersionPromiseRef.current;
         }
 
-        const latestArtwork = (artworksData || [])[0] as
-            | LatestFeedRow
-            | undefined;
+        const request = (async (): Promise<string | null> => {
+            try {
+                const [artworksResult, repostsResult] = await Promise.all([
+                    supabase
+                        .from("artworks")
+                        .select("id, created_at")
+                        .order("created_at", { ascending: false })
+                        .limit(1),
 
-        const latestRepost = (repostsData || [])[0] as LatestFeedRow | undefined;
+                    supabase
+                        .from("reposts")
+                        .select("id, created_at")
+                        .order("created_at", { ascending: false })
+                        .limit(1),
+                ]);
 
-        const artworkVersion = latestArtwork
-            ? `${latestArtwork.id}-${latestArtwork.created_at}`
-            : "no-artworks";
+                if (artworksResult.error || repostsResult.error) {
+                    console.log(
+                        artworksResult.error?.message ||
+                        repostsResult.error?.message ||
+                        "Could not check feed updates."
+                    );
 
-        const repostVersion = latestRepost
-            ? `${latestRepost.id}-${latestRepost.created_at}`
-            : "no-reposts";
+                    return null;
+                }
 
-        return `${artworkVersion}|${repostVersion}`;
+                const latestArtwork = (artworksResult.data || [])[0] as
+                    | LatestFeedRow
+                    | undefined;
+
+                const latestRepost = (repostsResult.data || [])[0] as
+                    | LatestFeedRow
+                    | undefined;
+
+                const artworkVersion = latestArtwork
+                    ? `${latestArtwork.id}-${latestArtwork.created_at}`
+                    : "no-artworks";
+
+                const repostVersion = latestRepost
+                    ? `${latestRepost.id}-${latestRepost.created_at}`
+                    : "no-reposts";
+
+                return `${artworkVersion}|${repostVersion}`;
+            } catch (error) {
+                console.log("Could not check feed updates.", error);
+                return null;
+            }
+        })();
+
+        feedVersionPromiseRef.current = request;
+
+        void request.finally(() => {
+            if (feedVersionPromiseRef.current === request) {
+                feedVersionPromiseRef.current = null;
+            }
+        });
+
+        return request;
     }, [supabase]);
 
     const checkForFeedUpdates = useCallback(async () => {
@@ -88,21 +113,28 @@ export default function ProtectedAppLayout({
 
         if (!latestVersion) return;
 
-        if (lastSeenFeedVersion.current === null) {
-            lastSeenFeedVersion.current = latestVersion;
+        if (lastSeenFeedVersionRef.current === null) {
+            lastSeenFeedVersionRef.current = latestVersion;
             return;
         }
 
-        if (lastSeenFeedVersion.current !== latestVersion) {
+        // While already on Explore, treat the latest version as seen.
+        if (pathname === "/explore") {
+            lastSeenFeedVersionRef.current = latestVersion;
+            setHasNewFeed(false);
+            return;
+        }
+
+        if (lastSeenFeedVersionRef.current !== latestVersion) {
             setHasNewFeed(true);
         }
-    }, [fetchFeedVersion]);
+    }, [fetchFeedVersion, pathname]);
 
     const markFeedAsSeen = useCallback(async () => {
         const latestVersion = await fetchFeedVersion();
 
         if (latestVersion) {
-            lastSeenFeedVersion.current = latestVersion;
+            lastSeenFeedVersionRef.current = latestVersion;
         }
 
         setHasNewFeed(false);
@@ -111,14 +143,33 @@ export default function ProtectedAppLayout({
     useEffect(() => {
         void checkForFeedUpdates();
 
+        // No repeating feed checks while the user is already browsing Explore.
+        if (pathname === "/explore") {
+            return;
+        }
+
+        function handleVisibilityChange() {
+            if (document.visibilityState === "visible") {
+                void checkForFeedUpdates();
+            }
+        }
+
         const interval = window.setInterval(() => {
-            void checkForFeedUpdates();
-        }, 10_000);
+            if (document.visibilityState === "visible") {
+                void checkForFeedUpdates();
+            }
+        }, FEED_UPDATE_CHECK_INTERVAL_MS);
+
+        document.addEventListener("visibilitychange", handleVisibilityChange);
 
         return () => {
             window.clearInterval(interval);
+            document.removeEventListener(
+                "visibilitychange",
+                handleVisibilityChange
+            );
         };
-    }, [checkForFeedUpdates]);
+    }, [checkForFeedUpdates, pathname]);
 
     useEffect(() => {
         function openGlobalUpload() {
@@ -135,7 +186,6 @@ export default function ProtectedAppLayout({
 
         window.addEventListener("arthub:open-upload", openGlobalUpload);
         window.addEventListener("arthub:feed-refreshed", handleFeedRefreshed);
-
         window.addEventListener("arthub:artwork-created", markFeedAsNew);
         window.addEventListener("arthub:repost-changed", markFeedAsNew);
 
@@ -145,7 +195,6 @@ export default function ProtectedAppLayout({
                 "arthub:feed-refreshed",
                 handleFeedRefreshed
             );
-
             window.removeEventListener("arthub:artwork-created", markFeedAsNew);
             window.removeEventListener("arthub:repost-changed", markFeedAsNew);
         };
