@@ -1,11 +1,11 @@
+import Link from "next/link";
+
 export default function Hero() {
   return (
     <section className="relative flex min-h-[90vh] items-center justify-center overflow-hidden px-6">
-
       <div className="hero-glow" />
 
       <div className="relative z-10 max-w-6xl text-center">
-
         <span className="rounded-full border border-zinc-800 px-4 py-2 text-sm text-zinc-400">
           🎨 Built for Artists
         </span>
@@ -17,21 +17,17 @@ export default function Hero() {
         </h1>
 
         <p className="mx-auto mt-6 max-w-2xl text-lg text-zinc-400">
-          ArtHub helps artists showcase artwork, gain followers,
-          and connect with a global creative community.
+          ArtHub helps artists showcase artwork, gain followers, and
+          connect with a global creative community.
         </p>
 
-        <div className="mt-10 flex justify-center gap-4">
-          <a
+        <div className="mt-10 flex justify-center">
+          <Link
             href="/explore"
-            className="rounded-xl bg-white px-8 py-4 font-semibold text-black"
+            className="rounded-xl bg-white px-8 py-4 font-semibold text-black transition hover:bg-zinc-200"
           >
             Explore Art
-          </a>
-
-          <button className="rounded-xl border border-zinc-700 px-8 py-4">
-            Join Community
-          </button>
+          </Link>
         </div>
       </div>
     </section>

@@ -1,9 +1,15 @@
 "use client";
 
-import { createNotification } from "@/app/lib/notifications";
+import dynamic from "next/dynamic";
 import Image from "next/image";
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import {
+    memo,
+    useCallback,
+    useEffect,
+    useRef,
+    useState,
+} from "react";
 import {
     Ban,
     Bookmark,
@@ -15,9 +21,24 @@ import {
     Trash2,
 } from "lucide-react";
 
-import ArtworkDetailModal from "./layout/ArtworkDetailModal";
-import ReportModal from "@/app/components/modals/ReportModal";
+import { createNotification } from "@/app/lib/notifications";
 import { createClient } from "@/app/lib/supabase";
+
+const ArtworkDetailModal = dynamic(
+    () => import("./layout/ArtworkDetailModal"),
+    {
+        ssr: false,
+        loading: () => null,
+    }
+);
+
+const ReportModal = dynamic(
+    () => import("@/app/components/modals/ReportModal"),
+    {
+        ssr: false,
+        loading: () => null,
+    }
+);
 
 type RepostedBy = {
     name: string;
@@ -47,12 +68,55 @@ type ArtworkCardProps = {
     initialReposted: boolean;
     initialFollowing: boolean;
 
-    onDelete?: (id: string) => void;
+    onDelete?: (id: string) => void | Promise<void>;
 
     variant?: "feed" | "profile";
 };
 
-export default function ArtworkCard({
+type ArtistAvatarProps = {
+    imageUrl: string | null;
+    label: string;
+    sizeClass: string;
+    isCreator: boolean;
+    small?: boolean;
+};
+
+function ArtistAvatar({
+    imageUrl,
+    label,
+    sizeClass,
+    isCreator,
+    small = false,
+}: ArtistAvatarProps) {
+    const ringClass = small
+        ? "rounded-full bg-gradient-to-br from-yellow-100 via-amber-400 to-yellow-700 p-[2px] shadow-[0_0_12px_rgba(245,158,11,0.55)]"
+        : "rounded-full bg-gradient-to-br from-yellow-100 via-amber-400 to-yellow-700 p-[3px] shadow-[0_0_18px_rgba(245,158,11,0.6)]";
+
+    const avatarBorder = isCreator
+        ? "border-2 border-zinc-950"
+        : "border border-zinc-700";
+
+    return (
+        <div className={isCreator ? ringClass : "shrink-0"}>
+            {imageUrl ? (
+                <img
+                    src={imageUrl}
+                    alt={label}
+                    className={`${sizeClass} rounded-full object-cover ${avatarBorder}`}
+                />
+            ) : (
+                <div
+                    className={`flex ${sizeClass} items-center justify-center rounded-full bg-zinc-800 font-bold text-zinc-200 ${isCreator ? "border-2 border-zinc-950" : ""
+                        }`}
+                >
+                    {label.charAt(0).toUpperCase()}
+                </div>
+            )}
+        </div>
+    );
+}
+
+function ArtworkCard({
     id,
     image,
     title,
@@ -73,12 +137,12 @@ export default function ArtworkCard({
     onDelete,
     variant = "feed",
 }: ArtworkCardProps) {
-    const supabase = useMemo(() => createClient(), []);
+    const supabaseRef = useRef<ReturnType<typeof createClient> | null>(null);
 
     const [isDetailOpen, setIsDetailOpen] = useState(false);
     const [isSafetyMenuOpen, setIsSafetyMenuOpen] = useState(false);
     const [isReportOpen, setIsReportOpen] = useState(false);
-    const [blockLoading, setBlockLoading] = useState(false);
+
     const [hiddenByBlock, setHiddenByBlock] = useState(false);
 
     const [liked, setLiked] = useState(initialLiked);
@@ -91,12 +155,25 @@ export default function ArtworkCard({
     const [commentCount, setCommentCount] = useState(initialComments);
     const [repostCount, setRepostCount] = useState(initialReposts);
 
+    const [likeLoading, setLikeLoading] = useState(false);
+    const [saveLoading, setSaveLoading] = useState(false);
+    const [followLoading, setFollowLoading] = useState(false);
     const [repostLoading, setRepostLoading] = useState(false);
+    const [blockLoading, setBlockLoading] = useState(false);
+    const [deleteLoading, setDeleteLoading] = useState(false);
 
     const isOwner = viewerUserId === ownerId;
     const isCreator = username.trim().toLowerCase() === "the_creator";
     const isRepostedByCreator =
         repostedBy?.username.trim().toLowerCase() === "the_creator";
+
+    const getSupabase = useCallback(() => {
+        if (!supabaseRef.current) {
+            supabaseRef.current = createClient();
+        }
+
+        return supabaseRef.current;
+    }, []);
 
     useEffect(() => {
         setLiked(initialLiked);
@@ -111,6 +188,15 @@ export default function ArtworkCard({
 
         setHiddenByBlock(false);
         setIsSafetyMenuOpen(false);
+        setIsDetailOpen(false);
+        setIsReportOpen(false);
+
+        setLikeLoading(false);
+        setSaveLoading(false);
+        setFollowLoading(false);
+        setRepostLoading(false);
+        setBlockLoading(false);
+        setDeleteLoading(false);
     }, [
         id,
         initialLiked,
@@ -123,44 +209,44 @@ export default function ArtworkCard({
         initialReposts,
     ]);
 
-    async function handleLike() {
+    const handleLike = useCallback(async () => {
         if (!viewerUserId) {
             alert("Please login first.");
             return;
         }
 
-        if (liked) {
-            const { error } = await supabase
+        if (likeLoading) return;
+
+        const wasLiked = liked;
+        const change = wasLiked ? -1 : 1;
+
+        setLikeLoading(true);
+        setLiked(!wasLiked);
+        setLikes((current) => Math.max(current + change, 0));
+
+        const supabase = getSupabase();
+
+        const { error } = wasLiked
+            ? await supabase
                 .from("likes")
                 .delete()
                 .eq("user_id", viewerUserId)
-                .eq("artwork_id", id);
-
-            if (error) {
-                alert(error.message);
-                return;
-            }
-
-            setLiked(false);
-            setLikes((previous) => Math.max(previous - 1, 0));
-            return;
-        }
-
-        const { error } = await supabase.from("likes").insert({
-            user_id: viewerUserId,
-            artwork_id: id,
-        });
+                .eq("artwork_id", id)
+            : await supabase.from("likes").insert({
+                user_id: viewerUserId,
+                artwork_id: id,
+            });
 
         if (error) {
+            setLiked(wasLiked);
+            setLikes((current) => Math.max(current - change, 0));
             alert(error.message);
+            setLikeLoading(false);
             return;
         }
 
-        setLiked(true);
-        setLikes((previous) => previous + 1);
-
-        if (ownerId !== viewerUserId) {
-            await createNotification({
+        if (!wasLiked && ownerId !== viewerUserId) {
+            void createNotification({
                 userId: ownerId,
                 actorId: viewerUserId,
                 artworkId: id,
@@ -168,46 +254,56 @@ export default function ArtworkCard({
                 message: `liked your artwork "${title}"`,
             });
         }
-    }
 
-    async function handleSave() {
+        setLikeLoading(false);
+    }, [
+        getSupabase,
+        id,
+        likeLoading,
+        liked,
+        ownerId,
+        title,
+        viewerUserId,
+    ]);
+
+    const handleSave = useCallback(async () => {
         if (!viewerUserId) {
             alert("Please login first.");
             return;
         }
 
-        if (saved) {
-            const { error } = await supabase
+        if (saveLoading) return;
+
+        const wasSaved = saved;
+        const change = wasSaved ? -1 : 1;
+
+        setSaveLoading(true);
+        setSaved(!wasSaved);
+        setSaves((current) => Math.max(current + change, 0));
+
+        const supabase = getSupabase();
+
+        const { error } = wasSaved
+            ? await supabase
                 .from("saves")
                 .delete()
                 .eq("user_id", viewerUserId)
-                .eq("artwork_id", id);
-
-            if (error) {
-                alert(error.message);
-                return;
-            }
-
-            setSaved(false);
-            setSaves((previous) => Math.max(previous - 1, 0));
-            return;
-        }
-
-        const { error } = await supabase.from("saves").insert({
-            user_id: viewerUserId,
-            artwork_id: id,
-        });
+                .eq("artwork_id", id)
+            : await supabase.from("saves").insert({
+                user_id: viewerUserId,
+                artwork_id: id,
+            });
 
         if (error) {
+            setSaved(wasSaved);
+            setSaves((current) => Math.max(current - change, 0));
             alert(error.message);
+            setSaveLoading(false);
             return;
         }
 
-        setSaved(true);
-        setSaves((previous) => previous + 1);
-
-        if (ownerId !== viewerUserId) {
-            await createNotification({
+        if (!wasSaved && ownerId !== viewerUserId) {
+            void createNotification({
                 userId: ownerId,
                 actorId: viewerUserId,
                 artworkId: id,
@@ -215,9 +311,19 @@ export default function ArtworkCard({
                 message: `saved your artwork "${title}"`,
             });
         }
-    }
 
-    async function handleRepost() {
+        setSaveLoading(false);
+    }, [
+        getSupabase,
+        id,
+        ownerId,
+        saveLoading,
+        saved,
+        title,
+        viewerUserId,
+    ]);
+
+    const handleRepost = useCallback(async () => {
         if (!viewerUserId) {
             alert("Please login first.");
             return;
@@ -225,46 +331,36 @@ export default function ArtworkCard({
 
         if (repostLoading) return;
 
-        setRepostLoading(true);
+        const wasReposted = reposted;
+        const change = wasReposted ? -1 : 1;
 
-        if (reposted) {
-            const { error } = await supabase
+        setRepostLoading(true);
+        setReposted(!wasReposted);
+        setRepostCount((current) => Math.max(current + change, 0));
+
+        const supabase = getSupabase();
+
+        const { error } = wasReposted
+            ? await supabase
                 .from("reposts")
                 .delete()
                 .eq("user_id", viewerUserId)
-                .eq("artwork_id", id);
-
-            setRepostLoading(false);
-
-            if (error) {
-                alert(error.message);
-                return;
-            }
-
-            setReposted(false);
-            setRepostCount((previous) => Math.max(previous - 1, 0));
-
-            window.dispatchEvent(new Event("arthub:repost-changed"));
-            return;
-        }
-
-        const { error } = await supabase.from("reposts").insert({
-            user_id: viewerUserId,
-            artwork_id: id,
-        });
-
-        setRepostLoading(false);
+                .eq("artwork_id", id)
+            : await supabase.from("reposts").insert({
+                user_id: viewerUserId,
+                artwork_id: id,
+            });
 
         if (error) {
+            setReposted(wasReposted);
+            setRepostCount((current) => Math.max(current - change, 0));
             alert(error.message);
+            setRepostLoading(false);
             return;
         }
 
-        setReposted(true);
-        setRepostCount((previous) => previous + 1);
-
-        if (ownerId !== viewerUserId) {
-            await createNotification({
+        if (!wasReposted && ownerId !== viewerUserId) {
+            void createNotification({
                 userId: ownerId,
                 actorId: viewerUserId,
                 artworkId: id,
@@ -274,15 +370,28 @@ export default function ArtworkCard({
         }
 
         window.dispatchEvent(new Event("arthub:repost-changed"));
-    }
+        setRepostLoading(false);
+    }, [
+        getSupabase,
+        id,
+        ownerId,
+        repostLoading,
+        reposted,
+        title,
+        viewerUserId,
+    ]);
 
-    async function handleFollow() {
+    const handleFollow = useCallback(async () => {
         if (!viewerUserId) {
             alert("Please login first.");
             return;
         }
 
-        if (isOwner) return;
+        if (isOwner || followLoading) return;
+
+        setFollowLoading(true);
+
+        const supabase = getSupabase();
 
         const { data: usersBlocked, error: blockedError } = await supabase.rpc(
             "are_users_blocked",
@@ -294,6 +403,7 @@ export default function ArtworkCard({
 
         if (blockedError) {
             alert(blockedError.message);
+            setFollowLoading(false);
             return;
         }
 
@@ -301,46 +411,52 @@ export default function ArtworkCard({
             alert(
                 "You cannot follow this artist because one of you has blocked the other."
             );
+            setFollowLoading(false);
             return;
         }
 
-        if (following) {
-            const { error } = await supabase
+        const wasFollowing = following;
+
+        setFollowing(!wasFollowing);
+
+        const { error } = wasFollowing
+            ? await supabase
                 .from("follows")
                 .delete()
                 .eq("follower_id", viewerUserId)
-                .eq("following_id", ownerId);
-
-            if (error) {
-                alert(error.message);
-                return;
-            }
-
-            setFollowing(false);
-            return;
-        }
-
-        const { error } = await supabase.from("follows").insert({
-            follower_id: viewerUserId,
-            following_id: ownerId,
-        });
+                .eq("following_id", ownerId)
+            : await supabase.from("follows").insert({
+                follower_id: viewerUserId,
+                following_id: ownerId,
+            });
 
         if (error) {
+            setFollowing(wasFollowing);
             alert(error.message);
+            setFollowLoading(false);
             return;
         }
 
-        setFollowing(true);
+        if (!wasFollowing) {
+            void createNotification({
+                userId: ownerId,
+                actorId: viewerUserId,
+                type: "follow",
+                message: "started following you",
+            });
+        }
 
-        await createNotification({
-            userId: ownerId,
-            actorId: viewerUserId,
-            type: "follow",
-            message: "started following you",
-        });
-    }
+        setFollowLoading(false);
+    }, [
+        followLoading,
+        following,
+        getSupabase,
+        isOwner,
+        ownerId,
+        viewerUserId,
+    ]);
 
-    async function handleBlockArtist() {
+    const handleBlockArtist = useCallback(async () => {
         if (!viewerUserId || isOwner || blockLoading) return;
 
         const confirmed = window.confirm(
@@ -351,26 +467,44 @@ export default function ArtworkCard({
 
         setBlockLoading(true);
 
-        const { error } = await supabase.rpc("block_user", {
+        const { error } = await getSupabase().rpc("block_user", {
             p_blocked_id: ownerId,
         });
 
-        setBlockLoading(false);
-
         if (error) {
             alert(error.message);
+            setBlockLoading(false);
             return;
         }
 
         setIsSafetyMenuOpen(false);
         setHiddenByBlock(true);
+        setBlockLoading(false);
 
         alert(`@${username} has been blocked.`);
-    }
+    }, [
+        blockLoading,
+        getSupabase,
+        isOwner,
+        ownerId,
+        username,
+        viewerUserId,
+    ]);
 
-    function handleDelete() {
-        if (!onDelete) return;
-        onDelete(id);
+    const handleDelete = useCallback(async () => {
+        if (!onDelete || deleteLoading) return;
+
+        setDeleteLoading(true);
+
+        try {
+            await onDelete(id);
+        } finally {
+            setDeleteLoading(false);
+        }
+    }, [deleteLoading, id, onDelete]);
+
+    if (hiddenByBlock) {
+        return null;
     }
 
     const detailModal = isDetailOpen ? (
@@ -391,10 +525,6 @@ export default function ArtworkCard({
             onClose={() => setIsDetailOpen(false)}
         />
     ) : null;
-
-    if (hiddenByBlock) {
-        return null;
-    }
 
     if (variant === "profile") {
         return (
@@ -421,10 +551,11 @@ export default function ArtworkCard({
                     {isOwner && (
                         <button
                             type="button"
-                            onClick={handleDelete}
+                            onClick={() => void handleDelete()}
+                            disabled={deleteLoading}
                             title="Delete artwork"
                             aria-label="Delete artwork"
-                            className="absolute right-3 top-3 z-10 rounded-full border border-red-900/60 bg-black/60 p-2 text-red-400 opacity-100 backdrop-blur transition hover:bg-red-950 sm:opacity-0 sm:group-hover:opacity-100"
+                            className="absolute right-3 top-3 z-10 rounded-full border border-red-900/60 bg-black/60 p-2 text-red-400 opacity-100 backdrop-blur transition hover:bg-red-950 disabled:cursor-not-allowed disabled:opacity-50 sm:opacity-0 sm:group-hover:opacity-100"
                         >
                             <Trash2 size={17} />
                         </button>
@@ -446,7 +577,8 @@ export default function ArtworkCard({
                                 <button
                                     type="button"
                                     onClick={() => void handleLike()}
-                                    className={`flex items-center gap-1.5 transition hover:text-red-400 ${liked ? "text-red-400" : ""
+                                    disabled={likeLoading}
+                                    className={`flex items-center gap-1.5 transition hover:text-red-400 disabled:cursor-not-allowed disabled:opacity-50 ${liked ? "text-red-400" : ""
                                         }`}
                                     title="Like"
                                 >
@@ -471,7 +603,7 @@ export default function ArtworkCard({
                                     type="button"
                                     onClick={() => void handleRepost()}
                                     disabled={repostLoading}
-                                    className={`flex items-center gap-1.5 transition hover:text-green-400 disabled:opacity-50 ${reposted ? "text-green-400" : ""
+                                    className={`flex items-center gap-1.5 transition hover:text-green-400 disabled:cursor-not-allowed disabled:opacity-50 ${reposted ? "text-green-400" : ""
                                         }`}
                                     title="Repost"
                                 >
@@ -483,7 +615,8 @@ export default function ArtworkCard({
                             <button
                                 type="button"
                                 onClick={() => void handleSave()}
-                                className={`shrink-0 transition hover:text-yellow-400 ${saved ? "text-yellow-400" : "text-zinc-100"
+                                disabled={saveLoading}
+                                className={`shrink-0 transition hover:text-yellow-400 disabled:cursor-not-allowed disabled:opacity-50 ${saved ? "text-yellow-400" : "text-zinc-100"
                                     }`}
                                 title={saved ? "Unsave artwork" : "Save artwork"}
                             >
@@ -509,33 +642,13 @@ export default function ArtworkCard({
                         href={`/profile/${repostedBy.username}`}
                         className="flex items-center gap-2 px-2 text-sm font-semibold text-zinc-400 transition hover:text-zinc-200"
                     >
-                        <div
-                            className={
-                                isRepostedByCreator
-                                    ? "rounded-full bg-gradient-to-br from-yellow-100 via-amber-400 to-yellow-700 p-[2px] shadow-[0_0_12px_rgba(245,158,11,0.55)]"
-                                    : ""
-                            }
-                        >
-                            {repostedBy.avatarUrl ? (
-                                <img
-                                    src={repostedBy.avatarUrl}
-                                    alt={repostedBy.name}
-                                    className={`h-6 w-6 rounded-full object-cover ${isRepostedByCreator
-                                            ? "border border-zinc-950"
-                                            : "border border-zinc-700"
-                                        }`}
-                                />
-                            ) : (
-                                <div
-                                    className={`flex h-6 w-6 items-center justify-center rounded-full bg-zinc-800 text-[10px] font-bold text-zinc-200 ${isRepostedByCreator
-                                            ? "border border-zinc-950"
-                                            : ""
-                                        }`}
-                                >
-                                    {repostedBy.name.charAt(0).toUpperCase()}
-                                </div>
-                            )}
-                        </div>
+                        <ArtistAvatar
+                            imageUrl={repostedBy.avatarUrl}
+                            label={repostedBy.name}
+                            sizeClass="h-6 w-6"
+                            isCreator={isRepostedByCreator}
+                            small
+                        />
 
                         <Repeat2 size={16} className="text-green-400" />
 
@@ -552,53 +665,41 @@ export default function ArtworkCard({
                     <div className="flex items-center justify-between gap-4 p-5">
                         <Link
                             href={`/profile/${username}`}
-                            className="flex items-center gap-3"
+                            className="flex min-w-0 items-center gap-3"
                         >
-                            <div
-                                className={
-                                    isCreator
-                                        ? "rounded-full bg-gradient-to-br from-yellow-100 via-amber-400 to-yellow-700 p-[3px] shadow-[0_0_18px_rgba(245,158,11,0.6)]"
-                                        : ""
-                                }
-                            >
-                                {avatarUrl ? (
-                                    <img
-                                        src={avatarUrl}
-                                        alt={artist}
-                                        className={`h-11 w-11 rounded-full object-cover ${isCreator
-                                                ? "border-2 border-zinc-950"
-                                                : "border border-zinc-700"
-                                            }`}
-                                    />
-                                ) : (
-                                    <div
-                                        className={`flex h-11 w-11 items-center justify-center rounded-full bg-zinc-800 font-bold ${isCreator
-                                                ? "border-2 border-zinc-950"
-                                                : ""
-                                            }`}
-                                    >
-                                        {artist.charAt(0)}
-                                    </div>
-                                )}
-                            </div>
+                            <ArtistAvatar
+                                imageUrl={avatarUrl}
+                                label={artist}
+                                sizeClass="h-11 w-11"
+                                isCreator={isCreator}
+                            />
 
-                            <div>
-                                <h2 className="text-lg font-bold">{artist}</h2>
-                                <p className="text-sm text-zinc-400">@{username}</p>
+                            <div className="min-w-0">
+                                <h2 className="truncate text-lg font-bold">
+                                    {artist}
+                                </h2>
+                                <p className="truncate text-sm text-zinc-400">
+                                    @{username}
+                                </p>
                             </div>
                         </Link>
 
-                        <div className="flex items-center gap-2">
+                        <div className="flex shrink-0 items-center gap-2">
                             {!isOwner && (
                                 <button
                                     type="button"
                                     onClick={() => void handleFollow()}
-                                    className={`rounded-full px-4 py-2 text-sm ${following
+                                    disabled={followLoading}
+                                    className={`rounded-full px-4 py-2 text-sm transition disabled:cursor-not-allowed disabled:opacity-60 ${following
                                             ? "border border-zinc-700 bg-zinc-900 text-white"
                                             : "border border-zinc-700 hover:bg-zinc-800"
                                         }`}
                                 >
-                                    {following ? "Following" : "Follow"}
+                                    {followLoading
+                                        ? "Working..."
+                                        : following
+                                            ? "Following"
+                                            : "Follow"}
                                 </button>
                             )}
 
@@ -631,7 +732,9 @@ export default function ArtworkCard({
 
                                             <button
                                                 type="button"
-                                                onClick={() => void handleBlockArtist()}
+                                                onClick={() =>
+                                                    void handleBlockArtist()
+                                                }
                                                 disabled={blockLoading}
                                                 className="flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-left text-sm text-red-400 transition hover:bg-red-500/10 disabled:opacity-50"
                                             >
@@ -648,8 +751,10 @@ export default function ArtworkCard({
                             {isOwner && (
                                 <button
                                     type="button"
-                                    onClick={handleDelete}
-                                    className="rounded-full border border-red-900/60 px-3 py-2 text-red-400 hover:bg-red-950"
+                                    onClick={() => void handleDelete()}
+                                    disabled={deleteLoading}
+                                    className="rounded-full border border-red-900/60 px-3 py-2 text-red-400 transition hover:bg-red-950 disabled:cursor-not-allowed disabled:opacity-50"
+                                    title="Delete artwork"
                                 >
                                     <Trash2 size={17} />
                                 </button>
@@ -661,6 +766,7 @@ export default function ArtworkCard({
                         type="button"
                         onClick={() => setIsDetailOpen(true)}
                         className="relative block h-[420px] w-full overflow-hidden text-left sm:h-[520px]"
+                        aria-label={`Open ${title}`}
                     >
                         <Image
                             src={image}
@@ -688,8 +794,10 @@ export default function ArtworkCard({
                                 <button
                                     type="button"
                                     onClick={() => void handleLike()}
-                                    className={`flex items-center gap-2 hover:text-red-400 ${liked ? "text-red-400" : ""
+                                    disabled={likeLoading}
+                                    className={`flex items-center gap-2 transition hover:text-red-400 disabled:cursor-not-allowed disabled:opacity-50 ${liked ? "text-red-400" : ""
                                         }`}
+                                    title="Like"
                                 >
                                     <Heart
                                         size={21}
@@ -701,7 +809,8 @@ export default function ArtworkCard({
                                 <button
                                     type="button"
                                     onClick={() => setIsDetailOpen(true)}
-                                    className="flex items-center gap-2 hover:text-blue-400"
+                                    className="flex items-center gap-2 transition hover:text-blue-400"
+                                    title="Comments"
                                 >
                                     <MessageCircle size={21} />
                                     <span>{commentCount}</span>
@@ -711,8 +820,9 @@ export default function ArtworkCard({
                                     type="button"
                                     onClick={() => void handleRepost()}
                                     disabled={repostLoading}
-                                    className={`flex items-center gap-2 transition hover:text-green-400 disabled:opacity-50 ${reposted ? "text-green-400" : ""
+                                    className={`flex items-center gap-2 transition hover:text-green-400 disabled:cursor-not-allowed disabled:opacity-50 ${reposted ? "text-green-400" : ""
                                         }`}
+                                    title="Repost"
                                 >
                                     <Repeat2 size={21} />
                                     <span>{repostCount}</span>
@@ -722,8 +832,10 @@ export default function ArtworkCard({
                             <button
                                 type="button"
                                 onClick={() => void handleSave()}
-                                className={`flex items-center gap-1 hover:text-yellow-400 ${saved ? "text-yellow-400" : ""
+                                disabled={saveLoading}
+                                className={`flex items-center gap-1 transition hover:text-yellow-400 disabled:cursor-not-allowed disabled:opacity-50 ${saved ? "text-yellow-400" : ""
                                     }`}
+                                title={saved ? "Unsave artwork" : "Save artwork"}
                             >
                                 <Bookmark
                                     size={21}
@@ -752,3 +864,5 @@ export default function ArtworkCard({
         </>
     );
 }
+
+export default memo(ArtworkCard);

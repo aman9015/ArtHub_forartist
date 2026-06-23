@@ -2,7 +2,13 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import {
+    useCallback,
+    useEffect,
+    useMemo,
+    useRef,
+    useState,
+} from "react";
 import RequireAuth from "@/app/auth/RequireAuth";
 import { createClient } from "@/app/lib/supabase";
 import {
@@ -18,6 +24,8 @@ import {
     UserPlus,
 } from "lucide-react";
 
+const DASHBOARD_CACHE_TTL_MS = 45_000;
+
 type Artwork = {
     id: string;
     user_id: string;
@@ -27,82 +35,281 @@ type Artwork = {
     created_at: string;
 };
 
-function DashboardContent() {
-    const supabase = createClient();
+type DashboardData = {
+    userId: string;
+    artworks: Artwork[];
+    totalLikes: number;
+    totalSaves: number;
+    totalComments: number;
+    followers: number;
+    following: number;
+    savedAt: number;
+};
 
-    const [loading, setLoading] = useState(true);
-    const [myUserId, setMyUserId] = useState<string | null>(null);
-    const [myArtworks, setMyArtworks] = useState<Artwork[]>([]);
-    const [totalLikes, setTotalLikes] = useState(0);
-    const [totalSaves, setTotalSaves] = useState(0);
-    const [totalComments, setTotalComments] = useState(0);
-    const [followers, setFollowers] = useState(0);
-    const [following, setFollowing] = useState(0);
+type LoadDashboardOptions = {
+    force?: boolean;
+    silent?: boolean;
+};
+
+let dashboardCache: DashboardData | null = null;
+
+function DashboardSkeleton() {
+    return (
+        <main className="min-h-screen bg-black px-4 py-8 text-white">
+            <section className="mx-auto max-w-6xl">
+                <div className="mb-8 flex items-center justify-between gap-4">
+                    <div className="space-y-3">
+                        <div className="h-9 w-64 animate-pulse rounded bg-zinc-800" />
+                        <div className="h-4 w-80 max-w-full animate-pulse rounded bg-zinc-900" />
+                    </div>
+
+                    <div className="h-11 w-40 animate-pulse rounded-full bg-zinc-900" />
+                </div>
+
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                    {[0, 1, 2, 3, 4, 5].map((item) => (
+                        <div
+                            key={item}
+                            className="rounded-3xl border border-zinc-800 bg-zinc-950 p-6"
+                        >
+                            <div className="h-12 w-12 animate-pulse rounded-2xl bg-zinc-800" />
+                            <div className="mt-5 h-9 w-20 animate-pulse rounded bg-zinc-800" />
+                            <div className="mt-3 h-4 w-28 animate-pulse rounded bg-zinc-900" />
+                        </div>
+                    ))}
+                </div>
+            </section>
+        </main>
+    );
+}
+
+function DashboardContent() {
+    const supabase = useMemo(() => createClient(), []);
+
+    const [loading, setLoading] = useState(() => !dashboardCache);
+    const [refreshing, setRefreshing] = useState(false);
+    const [errorMessage, setErrorMessage] = useState("");
+
+    const [myArtworks, setMyArtworks] = useState<Artwork[]>(
+        () => dashboardCache?.artworks || []
+    );
+    const [totalLikes, setTotalLikes] = useState(
+        () => dashboardCache?.totalLikes || 0
+    );
+    const [totalSaves, setTotalSaves] = useState(
+        () => dashboardCache?.totalSaves || 0
+    );
+    const [totalComments, setTotalComments] = useState(
+        () => dashboardCache?.totalComments || 0
+    );
+    const [followers, setFollowers] = useState(
+        () => dashboardCache?.followers || 0
+    );
+    const [following, setFollowing] = useState(
+        () => dashboardCache?.following || 0
+    );
+
+    const mountedRef = useRef(true);
+    const requestVersionRef = useRef(0);
 
     useEffect(() => {
-        async function loadDashboard() {
-            setLoading(true);
+        mountedRef.current = true;
 
+        return () => {
+            mountedRef.current = false;
+            requestVersionRef.current += 1;
+        };
+    }, []);
+
+    const applyDashboardData = useCallback((data: DashboardData) => {
+        setMyArtworks(data.artworks);
+        setTotalLikes(data.totalLikes);
+        setTotalSaves(data.totalSaves);
+        setTotalComments(data.totalComments);
+        setFollowers(data.followers);
+        setFollowing(data.following);
+    }, []);
+
+    const loadDashboard = useCallback(
+        async ({
+            force = false,
+            silent = false,
+        }: LoadDashboardOptions = {}) => {
             const {
-                data: { user },
-            } = await supabase.auth.getUser();
+                data: { session },
+            } = await supabase.auth.getSession();
 
-            if (!user) {
+            const user = session?.user;
+
+            if (!user || !mountedRef.current) {
                 setLoading(false);
                 return;
             }
 
-            setMyUserId(user.id);
+            const cached =
+                dashboardCache?.userId === user.id ? dashboardCache : null;
 
-            const { data: artworksData } = await supabase
-                .from("artworks")
-                .select("id, user_id, title, description, image_url, created_at")
-                .eq("user_id", user.id)
-                .order("created_at", { ascending: false });
+            const cacheIsFresh =
+                cached &&
+                Date.now() - cached.savedAt < DASHBOARD_CACHE_TTL_MS;
 
-            const artworks = (artworksData || []) as Artwork[];
-            setMyArtworks(artworks);
+            if (cached && !force && cacheIsFresh) {
+                applyDashboardData(cached);
+                setLoading(false);
+                setRefreshing(false);
+                setErrorMessage("");
 
-            const artworkIds = artworks.map((artwork) => artwork.id);
+                window.setTimeout(() => {
+                    void loadDashboard({
+                        force: true,
+                        silent: true,
+                    });
+                }, 0);
 
-            if (artworkIds.length > 0) {
-                const { count: likesCount } = await supabase
-                    .from("likes")
-                    .select("*", { count: "exact", head: true })
-                    .in("artwork_id", artworkIds);
-
-                const { count: savesCount } = await supabase
-                    .from("saves")
-                    .select("*", { count: "exact", head: true })
-                    .in("artwork_id", artworkIds);
-
-                const { count: commentsCount } = await supabase
-                    .from("comments")
-                    .select("*", { count: "exact", head: true })
-                    .in("artwork_id", artworkIds);
-
-                setTotalLikes(likesCount || 0);
-                setTotalSaves(savesCount || 0);
-                setTotalComments(commentsCount || 0);
+                return;
             }
 
-            const { count: followersCount } = await supabase
-                .from("follows")
-                .select("*", { count: "exact", head: true })
-                .eq("following_id", user.id);
+            const requestVersion = requestVersionRef.current + 1;
+            requestVersionRef.current = requestVersion;
 
-            const { count: followingCount } = await supabase
-                .from("follows")
-                .select("*", { count: "exact", head: true })
-                .eq("follower_id", user.id);
+            if (cached) {
+                applyDashboardData(cached);
+                setLoading(false);
 
-            setFollowers(followersCount || 0);
-            setFollowing(followingCount || 0);
-            setLoading(false);
-        }
+                if (!silent) {
+                    setRefreshing(true);
+                }
+            } else if (!silent) {
+                setLoading(true);
+            }
 
-        loadDashboard();
-    }, [supabase]);
+            setErrorMessage("");
+
+            try {
+                const { data: artworksData, error: artworksError } =
+                    await supabase
+                        .from("artworks")
+                        .select(
+                            "id, user_id, title, description, image_url, created_at"
+                        )
+                        .eq("user_id", user.id)
+                        .order("created_at", { ascending: false });
+
+                if (
+                    !mountedRef.current ||
+                    requestVersion !== requestVersionRef.current
+                ) {
+                    return;
+                }
+
+                if (artworksError) {
+                    throw new Error(artworksError.message);
+                }
+
+                const artworks = (artworksData || []) as Artwork[];
+                const artworkIds = artworks.map((artwork) => artwork.id);
+
+                const [
+                    likesResult,
+                    savesResult,
+                    commentsResult,
+                    followersResult,
+                    followingResult,
+                ] = await Promise.all([
+                    artworkIds.length > 0
+                        ? supabase
+                            .from("likes")
+                            .select("id", { count: "exact", head: true })
+                            .in("artwork_id", artworkIds)
+                        : Promise.resolve({ count: 0, error: null }),
+
+                    artworkIds.length > 0
+                        ? supabase
+                            .from("saves")
+                            .select("id", { count: "exact", head: true })
+                            .in("artwork_id", artworkIds)
+                        : Promise.resolve({ count: 0, error: null }),
+
+                    artworkIds.length > 0
+                        ? supabase
+                            .from("comments")
+                            .select("id", { count: "exact", head: true })
+                            .in("artwork_id", artworkIds)
+                        : Promise.resolve({ count: 0, error: null }),
+
+                    supabase
+                        .from("follows")
+                        .select("follower_id", { count: "exact", head: true })
+                        .eq("following_id", user.id),
+
+                    supabase
+                        .from("follows")
+                        .select("following_id", { count: "exact", head: true })
+                        .eq("follower_id", user.id),
+                ]);
+
+                if (
+                    !mountedRef.current ||
+                    requestVersion !== requestVersionRef.current
+                ) {
+                    return;
+                }
+
+                const firstError =
+                    likesResult.error ||
+                    savesResult.error ||
+                    commentsResult.error ||
+                    followersResult.error ||
+                    followingResult.error;
+
+                if (firstError) {
+                    throw new Error(firstError.message);
+                }
+
+                const nextDashboardData: DashboardData = {
+                    userId: user.id,
+                    artworks,
+                    totalLikes: likesResult.count || 0,
+                    totalSaves: savesResult.count || 0,
+                    totalComments: commentsResult.count || 0,
+                    followers: followersResult.count || 0,
+                    following: followingResult.count || 0,
+                    savedAt: Date.now(),
+                };
+
+                dashboardCache = nextDashboardData;
+                applyDashboardData(nextDashboardData);
+            } catch (loadError) {
+                if (
+                    !mountedRef.current ||
+                    requestVersion !== requestVersionRef.current
+                ) {
+                    return;
+                }
+
+                setErrorMessage(
+                    loadError instanceof Error
+                        ? loadError.message
+                        : "Dashboard could not be loaded."
+                );
+            } finally {
+                if (
+                    !mountedRef.current ||
+                    requestVersion !== requestVersionRef.current
+                ) {
+                    return;
+                }
+
+                setLoading(false);
+                setRefreshing(false);
+            }
+        },
+        [applyDashboardData, supabase]
+    );
+
+    useEffect(() => {
+        void loadDashboard();
+    }, [loadDashboard]);
 
     const totalPosts = myArtworks.length;
 
@@ -111,40 +318,55 @@ function DashboardContent() {
             ? 0
             : Math.min(
                 Math.round(
-                    ((totalLikes + totalSaves + totalComments + followers) /
+                    ((totalLikes +
+                        totalSaves +
+                        totalComments +
+                        followers) /
                         totalPosts) *
                     10
                 ),
                 100
             );
 
-    const mostPopularArtwork = useMemo(() => {
-        if (myArtworks.length === 0) return null;
-        return myArtworks[0];
+    const latestArtwork = useMemo(() => {
+        return myArtworks[0] || null;
     }, [myArtworks]);
 
     const stats = [
-        { label: "Total Posts", value: totalPosts, icon: <ImageIcon size={22} /> },
-        { label: "Likes Received", value: totalLikes, icon: <Heart size={22} /> },
-        { label: "Saves Received", value: totalSaves, icon: <Bookmark size={22} /> },
+        {
+            label: "Total Posts",
+            value: totalPosts,
+            icon: <ImageIcon size={22} />,
+        },
+        {
+            label: "Likes Received",
+            value: totalLikes,
+            icon: <Heart size={22} />,
+        },
+        {
+            label: "Saves Received",
+            value: totalSaves,
+            icon: <Bookmark size={22} />,
+        },
         {
             label: "Comments Received",
             value: totalComments,
             icon: <MessageCircle size={22} />,
         },
-        { label: "Followers", value: followers, icon: <Users size={22} /> },
-        { label: "Following", value: following, icon: <UserPlus size={22} /> },
+        {
+            label: "Followers",
+            value: followers,
+            icon: <Users size={22} />,
+        },
+        {
+            label: "Following",
+            value: following,
+            icon: <UserPlus size={22} />,
+        },
     ];
 
     if (loading) {
-        return (
-            <main className="flex min-h-screen items-center justify-center bg-black text-white">
-                <div className="rounded-3xl border border-zinc-800 bg-zinc-950 p-8 text-center">
-                    <h1 className="text-xl font-bold">Loading dashboard...</h1>
-                    <p className="mt-2 text-zinc-400">Fetching real Supabase stats.</p>
-                </div>
-            </main>
-        );
+        return <DashboardSkeleton />;
     }
 
     return (
@@ -156,6 +378,7 @@ function DashboardContent() {
                             <BarChart3 size={32} />
                             Artist Dashboard
                         </h1>
+
                         <p className="mt-2 text-zinc-400">
                             Real analytics from your ArtHub profile.
                         </p>
@@ -163,12 +386,33 @@ function DashboardContent() {
 
                     <Link
                         href="/explore"
-                        className="flex items-center gap-2 rounded-full border border-zinc-800 px-5 py-3 text-sm font-semibold hover:bg-zinc-900"
+                        prefetch
+                        className="flex items-center gap-2 rounded-full border border-zinc-800 px-5 py-3 text-sm font-semibold transition hover:bg-zinc-900"
                     >
                         <ArrowLeft size={17} />
                         Back to Explore
                     </Link>
                 </div>
+
+                {refreshing && (
+                    <p className="mb-4 text-xs font-medium text-zinc-500">
+                        Updating dashboard...
+                    </p>
+                )}
+
+                {errorMessage && (
+                    <div className="mb-5 flex flex-col gap-3 rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200 sm:flex-row sm:items-center sm:justify-between">
+                        <p>{errorMessage}</p>
+
+                        <button
+                            type="button"
+                            onClick={() => void loadDashboard({ force: true })}
+                            className="rounded-full border border-red-300/30 px-4 py-2 font-semibold transition hover:bg-red-500/15"
+                        >
+                            Try again
+                        </button>
+                    </div>
+                )}
 
                 <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                     {stats.map((stat) => (
@@ -194,18 +438,21 @@ function DashboardContent() {
                         </h2>
 
                         <p className="mt-2 text-zinc-400">
-                            Based on real likes, saves, comments, followers, and posts.
+                            Based on real likes, saves, comments, followers, and
+                            posts.
                         </p>
 
                         <div className="mt-8">
                             <div className="flex items-end gap-3">
-                                <p className="text-6xl font-black">{engagementScore}</p>
+                                <p className="text-6xl font-black">
+                                    {engagementScore}
+                                </p>
                                 <p className="pb-2 text-zinc-400">/ 100</p>
                             </div>
 
                             <div className="mt-5 h-4 overflow-hidden rounded-full bg-zinc-900">
                                 <div
-                                    className="h-full rounded-full bg-white"
+                                    className="h-full rounded-full bg-white transition-all duration-500"
                                     style={{ width: `${engagementScore}%` }}
                                 />
                             </div>
@@ -218,12 +465,12 @@ function DashboardContent() {
                             Latest Artwork
                         </h2>
 
-                        {mostPopularArtwork ? (
+                        {latestArtwork ? (
                             <div className="mt-6">
                                 <div className="relative h-48 overflow-hidden rounded-3xl bg-zinc-900">
                                     <Image
-                                        src={mostPopularArtwork.image_url}
-                                        alt={mostPopularArtwork.title}
+                                        src={latestArtwork.image_url}
+                                        alt={latestArtwork.title}
                                         fill
                                         unoptimized
                                         sizes="400px"
@@ -232,7 +479,7 @@ function DashboardContent() {
                                 </div>
 
                                 <h3 className="mt-5 text-xl font-bold">
-                                    {mostPopularArtwork.title}
+                                    {latestArtwork.title}
                                 </h3>
 
                                 <p className="mt-2 text-sm text-zinc-500">

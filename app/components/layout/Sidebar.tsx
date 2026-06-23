@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   BarChart3,
   Bell,
@@ -20,12 +21,21 @@ type SidebarProps = {
   onExploreClick?: () => void;
 };
 
+const ROUTES_TO_WARM = [
+  "/explore",
+  "/trending",
+  "/dashboard",
+  "/notifications",
+  "/messages",
+];
+
 export default function Sidebar({
   onUploadClick,
   hasNewFeed = false,
   onExploreClick,
 }: SidebarProps) {
   const supabase = useMemo(() => createClient(), []);
+  const router = useRouter();
 
   const [profileUrl, setProfileUrl] = useState("/create-profile");
   const [initial, setInitial] = useState("A");
@@ -34,19 +44,46 @@ export default function Sidebar({
   const [notificationCount, setNotificationCount] = useState(0);
   const [unreadMessageCount, setUnreadMessageCount] = useState(0);
 
+  const prefetchRoute = useCallback(
+    (href: string) => {
+      router.prefetch(href);
+    },
+    [router]
+  );
+
   useEffect(() => {
+    let cancelled = false;
+
     async function loadSidebarData() {
       const {
         data: { user },
       } = await supabase.auth.getUser();
 
-      if (!user) return;
+      if (!user || cancelled) return;
 
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("name, username, avatar_url")
-        .eq("id", user.id)
-        .single();
+      const [profileResult, notificationsResult, conversationsResult] =
+        await Promise.all([
+          supabase
+            .from("profiles")
+            .select("name, username, avatar_url")
+            .eq("id", user.id)
+            .single(),
+
+          supabase
+            .from("notifications")
+            .select("id", { count: "exact", head: true })
+            .eq("user_id", user.id)
+            .eq("is_read", false),
+
+          supabase
+            .from("conversations")
+            .select("id")
+            .or(`user_one.eq.${user.id},user_two.eq.${user.id}`),
+        ]);
+
+      if (cancelled) return;
+
+      const profile = profileResult.data;
 
       if (profile) {
         setProfileUrl(`/profile/${profile.username}`);
@@ -54,20 +91,10 @@ export default function Sidebar({
         setAvatarUrl(profile.avatar_url || null);
       }
 
-      const { count: notifications } = await supabase
-        .from("notifications")
-        .select("*", { count: "exact", head: true })
-        .eq("user_id", user.id)
-        .eq("is_read", false);
+      setNotificationCount(notificationsResult.count || 0);
 
-      setNotificationCount(notifications || 0);
-
-      const { data: conversations } = await supabase
-        .from("conversations")
-        .select("id")
-        .or(`user_one.eq.${user.id},user_two.eq.${user.id}`);
-
-      const conversationIds = conversations?.map((item) => item.id) || [];
+      const conversationIds =
+        conversationsResult.data?.map((conversation) => conversation.id) || [];
 
       if (conversationIds.length === 0) {
         setUnreadMessageCount(0);
@@ -76,22 +103,46 @@ export default function Sidebar({
 
       const { count: unreadMessages } = await supabase
         .from("messages")
-        .select("*", { count: "exact", head: true })
+        .select("id", { count: "exact", head: true })
         .in("conversation_id", conversationIds)
         .neq("sender_id", user.id)
         .eq("is_read", false);
 
-      setUnreadMessageCount(unreadMessages || 0);
+      if (!cancelled) {
+        setUnreadMessageCount(unreadMessages || 0);
+      }
     }
 
     void loadSidebarData();
+
+    return () => {
+      cancelled = true;
+    };
   }, [supabase]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      ROUTES_TO_WARM.forEach(prefetchRoute);
+
+      if (profileUrl !== "/create-profile") {
+        prefetchRoute(profileUrl);
+      }
+    }, 800);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [prefetchRoute, profileUrl]);
 
   return (
     <aside className="sidebar-scroll sticky top-4 h-[calc(100vh-2rem)] pr-1">
       <div className="flex min-h-full flex-col items-center gap-5">
         <Link
           href={profileUrl}
+          prefetch
+          onMouseEnter={() => prefetchRoute(profileUrl)}
+          onFocus={() => prefetchRoute(profileUrl)}
+          onTouchStart={() => prefetchRoute(profileUrl)}
           title="My profile"
           aria-label="My profile"
           className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-full bg-gradient-to-br from-purple-500 to-pink-500 text-2xl font-bold text-white transition hover:scale-105"
@@ -110,6 +161,10 @@ export default function Sidebar({
         <nav className="flex w-[76px] flex-col items-center gap-3 rounded-[2rem] border border-zinc-800 bg-zinc-950 p-3">
           <Link
             href="/explore"
+            prefetch
+            onMouseEnter={() => prefetchRoute("/explore")}
+            onFocus={() => prefetchRoute("/explore")}
+            onTouchStart={() => prefetchRoute("/explore")}
             title="Explore"
             aria-label="Explore"
             onClick={(event) => {
@@ -129,6 +184,10 @@ export default function Sidebar({
 
           <Link
             href="/trending"
+            prefetch
+            onMouseEnter={() => prefetchRoute("/trending")}
+            onFocus={() => prefetchRoute("/trending")}
+            onTouchStart={() => prefetchRoute("/trending")}
             title="Trending"
             aria-label="Trending"
             className="flex h-12 w-12 items-center justify-center rounded-2xl text-zinc-300 transition hover:bg-zinc-900 hover:text-white"
@@ -138,6 +197,10 @@ export default function Sidebar({
 
           <Link
             href="/dashboard"
+            prefetch
+            onMouseEnter={() => prefetchRoute("/dashboard")}
+            onFocus={() => prefetchRoute("/dashboard")}
+            onTouchStart={() => prefetchRoute("/dashboard")}
             title="Dashboard"
             aria-label="Dashboard"
             className="flex h-12 w-12 items-center justify-center rounded-2xl text-zinc-300 transition hover:bg-zinc-900 hover:text-white"
@@ -147,6 +210,10 @@ export default function Sidebar({
 
           <Link
             href="/notifications"
+            prefetch
+            onMouseEnter={() => prefetchRoute("/notifications")}
+            onFocus={() => prefetchRoute("/notifications")}
+            onTouchStart={() => prefetchRoute("/notifications")}
             title="Notifications"
             aria-label="Notifications"
             className="relative flex h-12 w-12 items-center justify-center rounded-2xl text-zinc-300 transition hover:bg-zinc-900 hover:text-white"
@@ -162,6 +229,10 @@ export default function Sidebar({
 
           <Link
             href="/messages"
+            prefetch
+            onMouseEnter={() => prefetchRoute("/messages")}
+            onFocus={() => prefetchRoute("/messages")}
+            onTouchStart={() => prefetchRoute("/messages")}
             title="Messages"
             aria-label="Messages"
             className="relative flex h-12 w-12 items-center justify-center rounded-2xl text-zinc-300 transition hover:bg-zinc-900 hover:text-white"

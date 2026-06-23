@@ -1,10 +1,24 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import RequireAuth from "@/app/auth/RequireAuth";
 import { createClient } from "@/app/lib/supabase";
-import { ArrowLeft, ImageIcon, Heart, Trophy, Users } from "lucide-react";
+import {
+  ArrowLeft,
+  Heart,
+  ImageIcon,
+  Trophy,
+  Users,
+} from "lucide-react";
+
+const TRENDING_CACHE_TTL_MS = 60_000;
 
 type Profile = {
   id: string;
@@ -23,11 +37,18 @@ type Follow = {
   following_id: string;
 };
 
+type ArtworkRelation =
+  | {
+    user_id: string;
+  }
+  | {
+    user_id: string;
+  }[]
+  | null;
+
 type LikeWithArtwork = {
   artwork_id: string;
-  artworks: {
-    user_id: string;
-  }[];
+  artworks: ArtworkRelation;
 };
 
 type TrendingArtist = Profile & {
@@ -37,101 +58,288 @@ type TrendingArtist = Profile & {
   score: number;
 };
 
-function TrendingContent() {
-  const supabase = createClient();
+type TrendingCache = {
+  artists: TrendingArtist[];
+  savedAt: number;
+};
 
-  const [artists, setArtists] = useState<TrendingArtist[]>([]);
-  const [loading, setLoading] = useState(true);
+let trendingCache: TrendingCache | null = null;
+
+function increaseCount(map: Map<string, number>, id: string) {
+  map.set(id, (map.get(id) || 0) + 1);
+}
+
+function getArtworkOwnerId(like: LikeWithArtwork) {
+  if (Array.isArray(like.artworks)) {
+    return like.artworks[0]?.user_id || null;
+  }
+
+  return like.artworks?.user_id || null;
+}
+
+function TrendingSkeleton() {
+  return (
+    <div className="grid gap-4">
+      {[0, 1, 2, 3, 4].map((item) => (
+        <div
+          key={item}
+          className="rounded-3xl border border-zinc-800 bg-zinc-950 p-5"
+        >
+          <div className="flex items-center gap-4">
+            <div className="h-12 w-12 animate-pulse rounded-2xl bg-zinc-800" />
+
+            <div className="h-16 w-16 animate-pulse rounded-full bg-zinc-800" />
+
+            <div className="min-w-0 flex-1 space-y-3">
+              <div className="h-5 w-40 animate-pulse rounded bg-zinc-800" />
+              <div className="h-4 w-28 animate-pulse rounded bg-zinc-900" />
+              <div className="h-3 w-64 max-w-full animate-pulse rounded bg-zinc-900" />
+            </div>
+
+            <div className="hidden gap-3 md:grid md:grid-cols-4">
+              {[0, 1, 2, 3].map((stat) => (
+                <div
+                  key={stat}
+                  className="h-16 w-16 animate-pulse rounded-2xl bg-zinc-900"
+                />
+              ))}
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function TrendingContent() {
+  const supabase = useMemo(() => createClient(), []);
+
+  const [artists, setArtists] = useState<TrendingArtist[]>(
+    () => trendingCache?.artists || []
+  );
+  const [initialLoading, setInitialLoading] = useState(
+    () => !trendingCache
+  );
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const mountedRef = useRef(true);
+  const requestVersionRef = useRef(0);
 
   useEffect(() => {
-    async function loadTrendingArtists() {
-      setLoading(true);
+    mountedRef.current = true;
 
-      const { data: profilesData } = await supabase
-        .from("profiles")
-        .select("id, name, username, avatar_url, about");
+    return () => {
+      mountedRef.current = false;
+      requestVersionRef.current += 1;
+    };
+  }, []);
 
-      const { data: artworksData } = await supabase
-        .from("artworks")
-        .select("id, user_id");
+  const loadTrendingArtists = useCallback(
+    async (forceRefresh = false) => {
+      const cached = trendingCache;
+      const cacheIsFresh =
+        cached &&
+        Date.now() - cached.savedAt < TRENDING_CACHE_TTL_MS;
 
-      const { data: followsData } = await supabase
-        .from("follows")
-        .select("following_id");
+      if (cached && cacheIsFresh && !forceRefresh) {
+        setArtists(cached.artists);
+        setInitialLoading(false);
+        setRefreshing(false);
+        setError(null);
+        return;
+      }
 
-      const { data: likesData } = await supabase
-        .from("likes")
-        .select("artwork_id, artworks(user_id)");
+      const requestVersion = requestVersionRef.current + 1;
+      requestVersionRef.current = requestVersion;
 
-      const profiles = (profilesData || []) as Profile[];
-      const artworks = (artworksData || []) as Artwork[];
-      const follows = (followsData || []) as Follow[];
-      const likes = (likesData || []) as LikeWithArtwork[];
+      if (cached) {
+        setArtists(cached.artists);
+        setInitialLoading(false);
+        setRefreshing(true);
+      } else {
+        setInitialLoading(true);
+        setRefreshing(false);
+      }
 
-      const trendingArtists: TrendingArtist[] = profiles
-        .map((profile) => {
-          const followerCount = follows.filter(
-            (follow) => follow.following_id === profile.id
-          ).length;
+      setError(null);
 
-          const artworkCount = artworks.filter(
-            (artwork) => artwork.user_id === profile.id
-          ).length;
+      try {
+        const [
+          profilesResult,
+          artworksResult,
+          followsResult,
+          likesResult,
+        ] = await Promise.all([
+          supabase
+            .from("profiles")
+            .select("id, name, username, avatar_url, about"),
 
-          const totalLikes = likes.filter(
-            (like) => like.artworks?.[0]?.user_id === profile.id
-          ).length;
+          supabase.from("artworks").select("id, user_id"),
 
-          const score = followerCount * 5 + artworkCount * 2 + totalLikes;
+          supabase.from("follows").select("following_id"),
 
-          return {
-            ...profile,
-            followerCount,
-            artworkCount,
-            totalLikes,
-            score,
-          };
-        })
-        .sort((a, b) => b.score - a.score)
-        .slice(0, 50);
+          supabase.from("likes").select("artwork_id, artworks(user_id)"),
+        ]);
 
-      setArtists(trendingArtists);
-      setLoading(false);
-    }
+        if (
+          !mountedRef.current ||
+          requestVersion !== requestVersionRef.current
+        ) {
+          return;
+        }
 
-    loadTrendingArtists();
-  }, [supabase]);
+        const firstError =
+          profilesResult.error ||
+          artworksResult.error ||
+          followsResult.error ||
+          likesResult.error;
 
-  if (loading) {
-    return (
-      <main className="flex min-h-screen items-center justify-center bg-black text-white">
-        <div className="rounded-3xl border border-zinc-800 bg-zinc-950 p-8">
-          Loading trending artists...
-        </div>
-      </main>
-    );
-  }
+        if (firstError) {
+          throw new Error(firstError.message);
+        }
+
+        const profiles = (profilesResult.data || []) as Profile[];
+        const artworks = (artworksResult.data || []) as Artwork[];
+        const follows = (followsResult.data || []) as Follow[];
+        const likes = (likesResult.data || []) as LikeWithArtwork[];
+
+        const followerCounts = new Map<string, number>();
+        const artworkCounts = new Map<string, number>();
+        const likeCounts = new Map<string, number>();
+        const artworkOwnerById = new Map<string, string>();
+
+        for (const follow of follows) {
+          increaseCount(followerCounts, follow.following_id);
+        }
+
+        for (const artwork of artworks) {
+          artworkOwnerById.set(artwork.id, artwork.user_id);
+          increaseCount(artworkCounts, artwork.user_id);
+        }
+
+        for (const like of likes) {
+          const ownerId =
+            getArtworkOwnerId(like) ||
+            artworkOwnerById.get(like.artwork_id);
+
+          if (ownerId) {
+            increaseCount(likeCounts, ownerId);
+          }
+        }
+
+        const rankedArtists = profiles
+          .map((profile) => {
+            const followerCount = followerCounts.get(profile.id) || 0;
+            const artworkCount = artworkCounts.get(profile.id) || 0;
+            const totalLikes = likeCounts.get(profile.id) || 0;
+
+            return {
+              ...profile,
+              followerCount,
+              artworkCount,
+              totalLikes,
+              score: followerCount * 5 + artworkCount * 2 + totalLikes,
+            };
+          })
+          .sort(
+            (first, second) =>
+              second.score - first.score ||
+              second.totalLikes - first.totalLikes ||
+              second.followerCount - first.followerCount ||
+              second.artworkCount - first.artworkCount ||
+              first.name.localeCompare(second.name)
+          )
+          .slice(0, 50);
+
+        trendingCache = {
+          artists: rankedArtists,
+          savedAt: Date.now(),
+        };
+
+        setArtists(rankedArtists);
+      } catch (loadError) {
+        if (
+          !mountedRef.current ||
+          requestVersion !== requestVersionRef.current
+        ) {
+          return;
+        }
+
+        setError(
+          loadError instanceof Error
+            ? loadError.message
+            : "Trending artists could not be loaded."
+        );
+
+        if (!trendingCache) {
+          setArtists([]);
+        }
+      } finally {
+        if (
+          !mountedRef.current ||
+          requestVersion !== requestVersionRef.current
+        ) {
+          return;
+        }
+
+        setInitialLoading(false);
+        setRefreshing(false);
+      }
+    },
+    [supabase]
+  );
+
+  useEffect(() => {
+    void loadTrendingArtists();
+  }, [loadTrendingArtists]);
 
   return (
     <main className="min-h-screen bg-black px-4 py-6 text-white">
       <section className="mx-auto max-w-5xl">
-        <div className="mb-6 flex items-center gap-4">
-          <Link
-            href="/explore"
-            className="rounded-full border border-zinc-800 p-3 hover:bg-zinc-900"
-          >
-            <ArrowLeft size={20} />
-          </Link>
+        <div className="mb-6 flex items-center justify-between gap-4">
+          <div className="flex min-w-0 items-center gap-4">
+            <Link
+              href="/explore"
+              prefetch
+              className="shrink-0 rounded-full border border-zinc-800 p-3 transition hover:bg-zinc-900"
+              aria-label="Back to Explore"
+            >
+              <ArrowLeft size={20} />
+            </Link>
 
-          <div>
-            <h1 className="text-3xl font-bold">Trending Artists</h1>
-            <p className="text-sm text-zinc-400">
-              Ranked by followers, artworks, and total likes.
-            </p>
+            <div className="min-w-0">
+              <h1 className="text-3xl font-bold">Trending Artists</h1>
+              <p className="text-sm text-zinc-400">
+                Ranked by followers, artworks, and total likes.
+              </p>
+            </div>
           </div>
+
+          {refreshing && (
+            <span className="hidden shrink-0 rounded-full border border-zinc-800 bg-zinc-950 px-3 py-1.5 text-xs font-semibold text-zinc-400 sm:inline-flex">
+              Refreshing ranking...
+            </span>
+          )}
         </div>
 
-        {artists.length === 0 ? (
+        {error && (
+          <div className="mb-4 flex flex-col gap-3 rounded-2xl border border-red-500/25 bg-red-500/10 p-4 text-sm text-red-100 sm:flex-row sm:items-center sm:justify-between">
+            <p>{error}</p>
+
+            <button
+              type="button"
+              onClick={() => void loadTrendingArtists(true)}
+              className="rounded-full border border-red-300/30 px-4 py-2 font-semibold transition hover:bg-red-500/15"
+            >
+              Try again
+            </button>
+          </div>
+        )}
+
+        {initialLoading ? (
+          <TrendingSkeleton />
+        ) : artists.length === 0 ? (
           <div className="rounded-3xl border border-zinc-800 bg-zinc-950 p-10 text-center text-zinc-500">
             No artists found yet.
           </div>
@@ -141,6 +349,7 @@ function TrendingContent() {
               <Link
                 key={artist.id}
                 href={`/profile/${artist.username}`}
+                prefetch
                 className="group rounded-3xl border border-zinc-800 bg-zinc-950 p-5 transition hover:border-zinc-600 hover:bg-zinc-900"
               >
                 <div className="flex items-center gap-4">
@@ -169,7 +378,7 @@ function TrendingContent() {
                       </h2>
 
                       {index === 0 && (
-                        <Trophy size={20} className="text-yellow-400" />
+                        <Trophy size={20} className="shrink-0 text-yellow-400" />
                       )}
                     </div>
 

@@ -1,7 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+    useCallback,
+    useEffect,
+    useMemo,
+    useRef,
+    useState,
+} from "react";
 import RequireAuth from "@/app/auth/RequireAuth";
 import { createClient } from "@/app/lib/supabase";
 
@@ -18,6 +24,8 @@ import {
     Upload,
     UserPlus,
 } from "lucide-react";
+
+const NOTIFICATIONS_CACHE_TTL_MS = 45_000;
 
 type Notification = {
     id: string;
@@ -38,6 +46,19 @@ type Profile = {
     name: string;
     username: string;
 };
+
+type NotificationsCache = {
+    userId: string;
+    notifications: Notification[];
+    savedAt: number;
+};
+
+type LoadNotificationsOptions = {
+    force?: boolean;
+    silent?: boolean;
+};
+
+let notificationsCache: NotificationsCache | null = null;
 
 function getNotificationLink(notification: Notification) {
     if (notification.commission_request_id) {
@@ -114,149 +135,376 @@ function notificationText(notification: Notification) {
     return `${notification.actorName || "Someone"} ${notification.message}`;
 }
 
+function NotificationsSkeleton() {
+    return (
+        <div className="space-y-4">
+            {[0, 1, 2, 3].map((item) => (
+                <div
+                    key={item}
+                    className="flex items-center gap-4 rounded-3xl border border-zinc-800 bg-zinc-950 p-5"
+                >
+                    <div className="h-12 w-12 animate-pulse rounded-full bg-zinc-800" />
+
+                    <div className="min-w-0 flex-1 space-y-3">
+                        <div className="h-4 w-2/3 animate-pulse rounded bg-zinc-800" />
+                        <div className="h-3 w-36 animate-pulse rounded bg-zinc-900" />
+                    </div>
+                </div>
+            ))}
+        </div>
+    );
+}
+
 function NotificationsContent() {
     const supabase = useMemo(() => createClient(), []);
 
     const [notifications, setNotifications] = useState<Notification[]>([]);
     const [loading, setLoading] = useState(true);
+    const [refreshing, setRefreshing] = useState(false);
     const [errorMessage, setErrorMessage] = useState("");
+    const [userId, setUserId] = useState<string | null>(null);
 
-    const unreadCount = notifications.filter(
-        (notification) => !notification.is_read
-    ).length;
+    const mountedRef = useRef(true);
+    const requestVersionRef = useRef(0);
+    const userIdRef = useRef<string | null>(null);
+    const notificationsRef = useRef<Notification[]>([]);
+    const refreshTimerRef = useRef<number | null>(null);
 
-    const loadNotifications = useCallback(async () => {
-        setLoading(true);
-        setErrorMessage("");
+    const updateNotifications = useCallback(
+        (
+            next:
+                | Notification[]
+                | ((current: Notification[]) => Notification[])
+        ) => {
+            setNotifications((current) => {
+                const resolved =
+                    typeof next === "function"
+                        ? (
+                            next as (
+                                currentNotifications: Notification[]
+                            ) => Notification[]
+                        )(current)
+                        : next;
 
-        const {
-            data: { user },
-        } = await supabase.auth.getUser();
+                notificationsRef.current = resolved;
 
-        if (!user) {
-            setLoading(false);
-            return;
-        }
+                if (userIdRef.current) {
+                    notificationsCache = {
+                        userId: userIdRef.current,
+                        notifications: resolved,
+                        savedAt: Date.now(),
+                    };
+                }
 
-        const { data: notificationsData, error } = await supabase
-            .from("notifications")
-            .select(
-                "id, type, message, is_read, created_at, actor_id, artwork_id, commission_request_id"
-            )
-            .eq("user_id", user.id)
-            .order("created_at", { ascending: false });
+                return resolved;
+            });
+        },
+        []
+    );
 
-        if (error) {
-            setErrorMessage(error.message);
-            setLoading(false);
-            return;
-        }
-
-        const databaseNotifications = (
-            notificationsData || []
-        ) as DbNotification[];
-
-        const actorIds = [
-            ...new Set(
-                databaseNotifications
-                    .map((notification) => notification.actor_id)
-                    .filter((id): id is string => Boolean(id))
+    const unreadCount = useMemo(
+        () =>
+            notifications.reduce(
+                (count, notification) =>
+                    notification.is_read ? count : count + 1,
+                0
             ),
-        ];
+        [notifications]
+    );
 
-        let profiles: Profile[] = [];
+    useEffect(() => {
+        mountedRef.current = true;
 
-        if (actorIds.length > 0) {
-            const { data: profilesData } = await supabase
-                .from("profiles")
-                .select("id, name, username")
-                .in("id", actorIds);
+        return () => {
+            mountedRef.current = false;
+            requestVersionRef.current += 1;
 
-            profiles = (profilesData || []) as Profile[];
-        }
+            if (refreshTimerRef.current) {
+                window.clearTimeout(refreshTimerRef.current);
+            }
+        };
+    }, []);
 
-        const profilesById = new Map(
-            profiles.map((profile) => [profile.id, profile])
-        );
+    const loadNotifications = useCallback(
+        async ({
+            force = false,
+            silent = false,
+        }: LoadNotificationsOptions = {}) => {
+            const {
+                data: { session },
+            } = await supabase.auth.getSession();
 
-        setNotifications(
-            databaseNotifications.map((notification) => ({
-                ...notification,
-                actorName: notification.actor_id
-                    ? profilesById.get(notification.actor_id)?.name || "Someone"
-                    : "",
-            }))
-        );
+            const user = session?.user;
 
-        setLoading(false);
-    }, [supabase]);
+            if (!user || !mountedRef.current) {
+                setLoading(false);
+                return;
+            }
+
+            userIdRef.current = user.id;
+            setUserId(user.id);
+
+            const cached =
+                notificationsCache?.userId === user.id
+                    ? notificationsCache
+                    : null;
+
+            const cacheIsFresh =
+                cached &&
+                Date.now() - cached.savedAt < NOTIFICATIONS_CACHE_TTL_MS;
+
+            if (cached && !force && cacheIsFresh) {
+                updateNotifications(cached.notifications);
+                setLoading(false);
+                setRefreshing(false);
+                setErrorMessage("");
+
+                window.setTimeout(() => {
+                    void loadNotifications({
+                        force: true,
+                        silent: true,
+                    });
+                }, 0);
+
+                return;
+            }
+
+            const requestVersion = requestVersionRef.current + 1;
+            requestVersionRef.current = requestVersion;
+
+            if (cached) {
+                updateNotifications(cached.notifications);
+                setLoading(false);
+
+                if (!silent) {
+                    setRefreshing(true);
+                }
+            } else if (!silent) {
+                setLoading(true);
+            }
+
+            setErrorMessage("");
+
+            try {
+                const { data: notificationsData, error } = await supabase
+                    .from("notifications")
+                    .select(
+                        "id, type, message, is_read, created_at, actor_id, artwork_id, commission_request_id"
+                    )
+                    .eq("user_id", user.id)
+                    .order("created_at", { ascending: false });
+
+                if (
+                    !mountedRef.current ||
+                    requestVersion !== requestVersionRef.current
+                ) {
+                    return;
+                }
+
+                if (error) {
+                    throw new Error(error.message);
+                }
+
+                const databaseNotifications = (
+                    notificationsData || []
+                ) as DbNotification[];
+
+                const actorIds = [
+                    ...new Set(
+                        databaseNotifications
+                            .map((notification) => notification.actor_id)
+                            .filter((id): id is string => Boolean(id))
+                    ),
+                ];
+
+                let profiles: Profile[] = [];
+
+                if (actorIds.length > 0) {
+                    const { data: profilesData, error: profilesError } =
+                        await supabase
+                            .from("profiles")
+                            .select("id, name, username")
+                            .in("id", actorIds);
+
+                    if (profilesError) {
+                        throw new Error(profilesError.message);
+                    }
+
+                    profiles = (profilesData || []) as Profile[];
+                }
+
+                if (
+                    !mountedRef.current ||
+                    requestVersion !== requestVersionRef.current
+                ) {
+                    return;
+                }
+
+                const profilesById = new Map(
+                    profiles.map((profile) => [profile.id, profile])
+                );
+
+                const formattedNotifications: Notification[] =
+                    databaseNotifications.map((notification) => ({
+                        ...notification,
+                        actorName: notification.actor_id
+                            ? profilesById.get(notification.actor_id)?.name ||
+                            "Someone"
+                            : "",
+                    }));
+
+                updateNotifications(formattedNotifications);
+            } catch (loadError) {
+                if (
+                    !mountedRef.current ||
+                    requestVersion !== requestVersionRef.current
+                ) {
+                    return;
+                }
+
+                setErrorMessage(
+                    loadError instanceof Error
+                        ? loadError.message
+                        : "Notifications could not be loaded."
+                );
+
+                if (!cached) {
+                    updateNotifications([]);
+                }
+            } finally {
+                if (
+                    !mountedRef.current ||
+                    requestVersion !== requestVersionRef.current
+                ) {
+                    return;
+                }
+
+                setLoading(false);
+                setRefreshing(false);
+            }
+        },
+        [supabase, updateNotifications]
+    );
 
     useEffect(() => {
         void loadNotifications();
     }, [loadNotifications]);
 
-    async function markAllAsRead() {
-        const {
-            data: { user },
-        } = await supabase.auth.getUser();
+    useEffect(() => {
+        if (!userId) return;
 
-        if (!user) return;
+        function scheduleRefresh() {
+            if (refreshTimerRef.current) {
+                window.clearTimeout(refreshTimerRef.current);
+            }
 
-        const { error } = await supabase
-            .from("notifications")
-            .update({ is_read: true })
-            .eq("user_id", user.id)
-            .eq("is_read", false);
-
-        if (error) {
-            setErrorMessage(error.message);
-            return;
+            refreshTimerRef.current = window.setTimeout(() => {
+                void loadNotifications({
+                    force: true,
+                    silent: true,
+                });
+            }, 250);
         }
 
-        setNotifications((previous) =>
-            previous.map((notification) => ({
+        const channel = supabase
+            .channel(`notifications-page-${userId}`)
+            .on(
+                "postgres_changes",
+                {
+                    event: "*",
+                    schema: "public",
+                    table: "notifications",
+                    filter: `user_id=eq.${userId}`,
+                },
+                scheduleRefresh
+            )
+            .subscribe();
+
+        return () => {
+            if (refreshTimerRef.current) {
+                window.clearTimeout(refreshTimerRef.current);
+            }
+
+            supabase.removeChannel(channel);
+        };
+    }, [loadNotifications, supabase, userId]);
+
+    const markAllAsRead = useCallback(async () => {
+        const currentUserId = userIdRef.current;
+
+        if (!currentUserId || unreadCount === 0) return;
+
+        const previousNotifications = notificationsRef.current;
+
+        updateNotifications((current) =>
+            current.map((notification) => ({
                 ...notification,
                 is_read: true,
             }))
         );
-    }
 
-    async function markOneAsRead(notificationId: string) {
         const { error } = await supabase
             .from("notifications")
             .update({ is_read: true })
-            .eq("id", notificationId);
+            .eq("user_id", currentUserId)
+            .eq("is_read", false);
 
-        if (error) return;
+        if (error) {
+            updateNotifications(previousNotifications);
+            setErrorMessage(error.message);
+        }
+    }, [supabase, unreadCount, updateNotifications]);
 
-        setNotifications((previous) =>
-            previous.map((notification) =>
-                notification.id === notificationId
-                    ? { ...notification, is_read: true }
-                    : notification
-            )
-        );
-    }
+    const markOneAsRead = useCallback(
+        async (notificationId: string) => {
+            const target = notificationsRef.current.find(
+                (notification) => notification.id === notificationId
+            );
 
-    async function clearNotifications() {
-        const {
-            data: { user },
-        } = await supabase.auth.getUser();
+            if (!target || target.is_read) return;
 
-        if (!user) return;
+            const previousNotifications = notificationsRef.current;
+
+            updateNotifications((current) =>
+                current.map((notification) =>
+                    notification.id === notificationId
+                        ? { ...notification, is_read: true }
+                        : notification
+                )
+            );
+
+            const { error } = await supabase
+                .from("notifications")
+                .update({ is_read: true })
+                .eq("id", notificationId);
+
+            if (error) {
+                updateNotifications(previousNotifications);
+                setErrorMessage(error.message);
+            }
+        },
+        [supabase, updateNotifications]
+    );
+
+    const clearNotifications = useCallback(async () => {
+        const currentUserId = userIdRef.current;
+
+        if (!currentUserId || notificationsRef.current.length === 0) return;
+
+        const previousNotifications = notificationsRef.current;
+
+        updateNotifications([]);
 
         const { error } = await supabase
             .from("notifications")
             .delete()
-            .eq("user_id", user.id);
+            .eq("user_id", currentUserId);
 
         if (error) {
+            updateNotifications(previousNotifications);
             setErrorMessage(error.message);
-            return;
         }
-
-        setNotifications([]);
-    }
+    }, [supabase, updateNotifications]);
 
     return (
         <div className="w-full min-w-0 px-1 py-2 text-white">
@@ -296,6 +544,7 @@ function NotificationsContent() {
 
                         <Link
                             href="/explore"
+                            prefetch
                             className="rounded-full border border-zinc-800 px-5 py-3 text-sm font-semibold transition hover:bg-zinc-900"
                         >
                             Back
@@ -303,24 +552,45 @@ function NotificationsContent() {
                     </div>
                 </div>
 
+                {refreshing && notifications.length > 0 && (
+                    <p className="mb-4 text-xs font-medium text-zinc-500">
+                        Updating notifications...
+                    </p>
+                )}
+
                 {errorMessage && (
-                    <div className="mb-5 rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
-                        {errorMessage}
+                    <div className="mb-5 flex flex-col gap-3 rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200 sm:flex-row sm:items-center sm:justify-between">
+                        <p>{errorMessage}</p>
+
+                        <button
+                            type="button"
+                            onClick={() =>
+                                void loadNotifications({
+                                    force: true,
+                                })
+                            }
+                            className="rounded-full border border-red-300/30 px-4 py-2 font-semibold transition hover:bg-red-500/15"
+                        >
+                            Try again
+                        </button>
                     </div>
                 )}
 
                 {loading ? (
-                    <div className="rounded-3xl border border-zinc-800 bg-zinc-950 p-12 text-center">
-                        <h2 className="text-xl font-bold">Loading notifications...</h2>
-                    </div>
+                    <NotificationsSkeleton />
                 ) : notifications.length > 0 ? (
                     <div className="space-y-4">
                         {notifications.map((notification) => (
                             <Link
                                 key={notification.id}
                                 href={getNotificationLink(notification)}
-                                onClick={() => void markOneAsRead(notification.id)}
-                                className={`flex items-center gap-4 rounded-3xl border border-zinc-800 p-5 transition hover:border-zinc-600 hover:bg-zinc-900 ${notification.is_read ? "bg-zinc-950" : "bg-zinc-900"
+                                prefetch
+                                onClick={() =>
+                                    void markOneAsRead(notification.id)
+                                }
+                                className={`flex items-center gap-4 rounded-3xl border border-zinc-800 p-5 transition hover:border-zinc-600 hover:bg-zinc-900 ${notification.is_read
+                                        ? "bg-zinc-950"
+                                        : "bg-zinc-900"
                                     }`}
                             >
                                 <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-black">
@@ -350,7 +620,8 @@ function NotificationsContent() {
                         </h2>
 
                         <p className="mt-2 text-zinc-400">
-                            New social activity and commission updates will appear here.
+                            New social activity and commission updates will appear
+                            here.
                         </p>
                     </div>
                 )}
